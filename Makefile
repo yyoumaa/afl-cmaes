@@ -32,6 +32,8 @@ CFLAGS     += -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign \
 	      -DAFL_PATH=\"$(HELPER_PATH)\" -DDOC_PATH=\"$(DOC_PATH)\" \
 	      -DBIN_PATH=\"$(BIN_PATH)\"
 
+CFLAGS += -I.
+
 ifneq "$(filter Linux GNU%,$(shell uname))" ""
   LDFLAGS  += -ldl -lm
 endif
@@ -69,8 +71,18 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	ln -sf afl-as as
 
-afl-fuzz: afl-fuzz.c $(COMM_HDR) | test_x86
-	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
+cmaes.o: cmaes.c cmaes_interface.h
+	$(CC) $(CFLAGS) -c cmaes.c
+
+boundary_transformation.o: boundary_transformation.c boundary_transformation.h
+	$(CC) $(CFLAGS) -c boundary_transformation.c
+
+# afl-fuzz: afl-fuzz.c $(COMM_HDR) | test_x86
+# 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
+# afl-fuzz: afl-fuzz.c cmaes.c boundary_transformation.c $(COMM_HDR) | test_x86
+# 	$(CC) $(CFLAGS) afl-fuzz.c cmaes.c boundary_transformation.c -o $@ $(LDFLAGS) 
+afl-fuzz: afl-fuzz.c cmaes.o boundary_transformation.o $(COMM_HDR) | test_x86
+	$(CC) $(CFLAGS) afl-fuzz.c cmaes.o boundary_transformation.o -o afl-fuzz $(LDFLAGS)
 
 afl-showmap: afl-showmap.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)

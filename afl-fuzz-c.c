@@ -381,31 +381,46 @@ enum {
 };
 
 int select_algorithm(int extras) {
-  int i_puppet;
-  u32 seed[2];
-  ck_read(dev_urandom_fd, &seed, sizeof(seed), "/dev/urandom");
-  srandom(seed[0]);
 
+  int i_puppet, j_puppet;
+  //double total_puppet = 0.0;
+  //srandom(time(NULL));
+
+    u32 seed[2];
+
+    ck_read(dev_urandom_fd, &seed, sizeof(seed), "/dev/urandom");
+
+    srandom(seed[0]);
+
+  //double sele = ((double)(random()%10000)*0.0001);
+  //SAYF("select : %f\n",sele);
+  j_puppet = 0;
   int operator_number = operator_num;
-  if (extras < 2) operator_number -= 2;
+  if (extras < 2) operator_number = operator_number - 2;
+  double range_sele = (double)probability_now[operator_number - 1];
+  double sele = ((double)(random() % 10000) * 0.0001 * range_sele);//生成一个[0,1)区间的随机数
 
-  double range_sele = probability_now[operator_number - 1];
-  double sele = ((double)(random() % 10000) * 0.0001 * range_sele);
-
-  for (i_puppet = 0; i_puppet < operator_number; i_puppet++) {
-    if (sele < probability_now[i_puppet])
-      break;
+  for (i_puppet = 0; i_puppet < operator_number; i_puppet++)
+  {
+      if (unlikely(i_puppet == 0))
+      {
+          if (sele < probability_now[i_puppet])
+            break;
+      }
+      else
+      {
+          if (sele < probability_now[i_puppet])
+          {
+              j_puppet =1;
+              break;
+          }
+      }
   }
+  if ((j_puppet ==1 && sele < probability_now[i_puppet-1]) || (i_puppet + 1 < operator_num && sele > probability_now[i_puppet +  1]))//错误检查
+    FATAL("error select_algorithm");
 
-  if (i_puppet == operator_number)  // failsafe check
-    i_puppet = operator_number - 1;
-
-  if (i_puppet >= operator_number) {
-    FATAL("Invalid selection: sele=%f, i_puppet=%d, operator_number=%d\n", sele, i_puppet, operator_number);
-  }
-  return i_puppet;
+  return i_puppet;//返回选中的算子编号
 }
-
  
 
 /* Get unix time in milliseconds */
@@ -4226,7 +4241,6 @@ if (limit_time_sig == 1)
           sprintf(tmp + banner_pad, "%s " cLCY VERSION cLGN
           " (%s)",  crash_mode ? cPIN "peruvian were-rabbit" :
           cYEL "AFL", use_banner);
- }
 }
 
   SAYF("\n%s\n\n", tmp);
@@ -8068,15 +8082,7 @@ havoc_stage:
   /* We essentially just do several thousand runs (depending on perf_score)
      where we take the input file and make random stacked tweaks. */
 
-  //执行一下记录分数
-  
-   common_fuzz_stuff(argv, out_buf, temp_len);
-   u64 prox_score_before_before = compute_proximity_score();
-   fprintf(fp,"\nu64 prox_score_before_before = %lld\n", prox_score_before_before);
-
-
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) { //每循环一轮这个，更新算子增加分数
-    fprintf(fp,"\nfor (stage_cur = 0; stage_cur < stage_max; stage_cur++) {\n");
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
@@ -8090,10 +8096,7 @@ havoc_stage:
     for (i = 0; i < use_stacking; i++) {
 
       // switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
-      int opt_case=select_algorithm( extras_cnt + a_extras_cnt );
-      fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
-      fprintf(fp,"%d %d\n",i,opt_case);
-      switch (opt_case) {
+      switch (select_algorithm( extras_cnt + a_extras_cnt )) {
         case 0:
 
           /* Flip a single bit somewhere. Spooky! */
@@ -8480,8 +8483,6 @@ havoc_stage:
 
     if (common_fuzz_stuff(argv, out_buf, temp_len))
       goto abandon_entry;
-    // int temp_score=compute_proximity_score();
-    // fprintf(fp,"\n temp_score %d \n",temp_score);
 
     /* out_buf might have been mangled a bit, so let's restore it to its
        original size and shape. */
@@ -8492,8 +8493,7 @@ havoc_stage:
 
     //记录关心指标复原后的分数
     u64 prox_score_after = compute_proximity_score();
-    fprintf(fp,"\n prox_score_before prox_score_after %lld,%lld:\n",prox_score_before,prox_score_after);
-    
+
     /* If we're finding new stuff, let's run for a bit longer, limits
        permitting. */
 
@@ -8512,17 +8512,16 @@ havoc_stage:
     //更新变异算子概率分布
     if (unlikely(queued_paths + unique_crashes > temp_total_found))
       { 
-            if((prox_score_after-prox_score_before>0) && (prox_score_before>0) && (prox_score_after>0)){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
+            if(prox_score_before-prox_score_after>0 && prox_score_before>0 && prox_score_after>0){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
               // u64 temp_temp_puppet = queued_paths + unique_crashes - temp_total_found;
-              u64 new_add_score = prox_score_after-prox_score_before;
+              u64 new_add_score = prox_score_before-prox_score_after;
               // total_puppet_find = total_puppet_find + temp_temp_puppet;
               for (i = 0; i < operator_num; i++)
               {
-                if (stage_finds_times[i] > stage_finds_times_origin[i]){//说明这个算子这轮用过
+                if (stage_finds_times[i] > stage_finds_times_origin[i])//说明这个算子这轮用过
                   stage_finds_score[i] += new_add_score;
                   if( stage_finds_times[i] > 0)
                     stage_finds_per_score[i]= stage_finds_score[i] /stage_finds_times[i];  //同时更新其平均增益
-                }
               }
             }
             
@@ -8698,7 +8697,7 @@ double fitfun(const double *y, int N) {
 void cma_updating(void) {
 
     while (!cmaes_TestForTermination(&evo)) {
-      double *const* pop = cmaes_SamplePopulation(&evo);
+      const double *const* pop = cmaes_SamplePopulation(&evo);
       for (int i = 0; i < cmaes_Get(&evo, "lambda"); ++i)
         arFunvals[i] = fitfun(pop[i], operator_num);
       cmaes_UpdateDistribution(&evo, arFunvals);
@@ -8706,11 +8705,11 @@ void cma_updating(void) {
 
     fprintf(fp,"\n------cma_updating------\n\n operator_prob: ");
     const double *xopt = cmaes_GetNew(&evo, "xmean");
-    double sum_exp= 0.0;
+    double sum = 0.0;
     for (int i = 0; i < operator_num; ++i)
-      sum_exp += exp(xopt[i]);
+      sum += xopt[i];
     for (int i = 0; i < operator_num; ++i){
-      operator_prob[i] = exp(xopt[i]) / sum_exp;
+      operator_prob[i] = xopt[i] / sum;
       fprintf(fp,"%lf ",operator_prob[i]);
     }
       
