@@ -101,7 +101,7 @@ int SPLICE_CYCLES_puppet;
 
 u64 cma_fuzz_time=0;
 
-#define operator_num 17
+#define operator_num 18
 // std::vector<double> operator_prob(operator_num);
 static double probability_now[operator_num];
 // libcmaes::CMAParameters<> cmaparams;
@@ -114,10 +114,14 @@ static double sigma[operator_num];
 u64 orig_hit_cnt_puppet = 0;
 u64 last_limit_time_start = 0;
 
-static u64  stage_finds_times[operator_num],//每个算子变异前执行次数
-            stage_finds_times_origin[operator_num];//每个算子变异前执行次数
-static double  stage_finds_score[operator_num],//每个算子增加分数
-               stage_finds_per_score[operator_num]; //每个算子平均增加分数
+static double  stage_finds_times[operator_num],//每个算子变异前执行次数
+            stage_finds_times_origin[operator_num],//每个算子变异前执行次数
+            stage_finds_per_times[operator_num],//这一轮使用到的算子次数，决定per_score
+            stage_finds_score_this_turn[operator_num],//这一轮使用到的算子增加分数
+    
+            stage_finds_score[operator_num],//每个算子增加分数
+            stage_finds_per_score[operator_num],//每个算子平均增加分数     
+            stage_finds_score_all[operator_num];//每个算子累计增益
 
 
 FILE *fp;
@@ -8074,6 +8078,7 @@ havoc_stage:
    u64 prox_score_before_before = compute_proximity_score();
    fprintf(fp,"\nu64 prox_score_before_before = %lld\n", prox_score_before_before);
 
+  s32 temp_len_puppet;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) { //每循环一轮这个，更新算子增加分数
     fprintf(fp,"\nfor (stage_cur = 0; stage_cur < stage_max; stage_cur++) {\n");
@@ -8094,379 +8099,703 @@ havoc_stage:
       fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
       fprintf(fp,"%d %d\n",i,opt_case);
       switch (opt_case) {
+        // case 0:
+
+        //   /* Flip a single bit somewhere. Spooky! */
+
+        //   FLIP_BIT(out_buf, UR(temp_len << 3));
+        //   stage_finds_times[0] += 1;
+        //   break;
         case 0:
+							/* Flip a single bit somewhere. Spooky! */
+							FLIP_BIT(out_buf, UR(temp_len << 3));
+							stage_finds_times[0] += 1;
+							break;
 
-          /* Flip a single bit somewhere. Spooky! */
+        // case 1:
 
-          FLIP_BIT(out_buf, UR(temp_len << 3));
-          stage_finds_times[0] += 1;
-          break;
+        //   /* Set byte to interesting value. */
 
+        //   out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
+        //   stage_finds_times[1] += 1;
+        //   break;
         case 1:
+							if (temp_len < 2) break;
+							temp_len_puppet = UR((temp_len << 3) - 1);
+							FLIP_BIT(out_buf, temp_len_puppet);
+							FLIP_BIT(out_buf, temp_len_puppet + 1);
+							stage_finds_times[1] += 1;
+							break;
 
-          /* Set byte to interesting value. */
+        // case 2:
 
-          out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
-          stage_finds_times[1] += 1;
-          break;
+        //   /* Set word to interesting value, randomly choosing endian. */
 
+        //   if (temp_len < 2) break;
+
+        //   if (UR(2)) {
+
+        //     *(u16*)(out_buf + UR(temp_len - 1)) =
+        //       interesting_16[UR(sizeof(interesting_16) >> 1)];
+
+        //   } else {
+
+        //     *(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
+        //       interesting_16[UR(sizeof(interesting_16) >> 1)]);
+
+        //   }
+        //   stage_finds_times[2] += 1;
+        //   break;
         case 2:
+							if (temp_len < 2) break;
+							temp_len_puppet = UR((temp_len << 3) - 3);
+							FLIP_BIT(out_buf, temp_len_puppet);
+							FLIP_BIT(out_buf, temp_len_puppet + 1);
+							FLIP_BIT(out_buf, temp_len_puppet + 2);
+							FLIP_BIT(out_buf, temp_len_puppet + 3);
+							stage_finds_times[2] += 1;
+							break;
 
-          /* Set word to interesting value, randomly choosing endian. */
+        // case 3:
 
-          if (temp_len < 2) break;
+        //   /* Set dword to interesting value, randomly choosing endian. */
 
-          if (UR(2)) {
+        //   if (temp_len < 4) break;
 
-            *(u16*)(out_buf + UR(temp_len - 1)) =
-              interesting_16[UR(sizeof(interesting_16) >> 1)];
+        //   if (UR(2)) {
 
-          } else {
+        //     *(u32*)(out_buf + UR(temp_len - 3)) =
+        //       interesting_32[UR(sizeof(interesting_32) >> 2)];
 
-            *(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
-              interesting_16[UR(sizeof(interesting_16) >> 1)]);
+        //   } else {
 
-          }
-          stage_finds_times[2] += 1;
-          break;
+        //     *(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
+        //       interesting_32[UR(sizeof(interesting_32) >> 2)]);
 
+        //   }
+        //   stage_finds_times[3] += 1;
+        //   break;
         case 3:
+							if (temp_len < 4) break;
+							out_buf[UR(temp_len)] ^= 0xFF;
+							stage_finds_times[3] += 1;
+							break;
 
-          /* Set dword to interesting value, randomly choosing endian. */
+        // case 4:
 
-          if (temp_len < 4) break;
+        //   /* Randomly subtract from byte. */
 
-          if (UR(2)) {
-
-            *(u32*)(out_buf + UR(temp_len - 3)) =
-              interesting_32[UR(sizeof(interesting_32) >> 2)];
-
-          } else {
-
-            *(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
-              interesting_32[UR(sizeof(interesting_32) >> 2)]);
-
-          }
-          stage_finds_times[3] += 1;
-          break;
-
+        //   out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
+        //   stage_finds_times[4] += 1;
+        //   break;
         case 4:
+							if (temp_len < 8) break;
+							*(u16*)(out_buf + UR(temp_len - 1)) ^= 0xFFFF;
+							stage_finds_times[4] += 1;
+							break;
 
-          /* Randomly subtract from byte. */
+        // case 5:
 
-          out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
-          stage_finds_times[4] += 1;
-          break;
+        //   /* Randomly add to byte. */
 
+        //   out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
+        //   stage_finds_times[5] += 1;
+        //   break;
         case 5:
+							if (temp_len < 8) break;
+							*(u32*)(out_buf + UR(temp_len - 3)) ^= 0xFFFFFFFF;
+							stage_finds_times[5] += 1;
+							break;
 
-          /* Randomly add to byte. */
+        // case 6:
 
-          out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
-          stage_finds_times[5] += 1;
-          break;
+        //   /* Randomly subtract from word, random endian. */
 
+        //   if (temp_len < 2) break;
+
+        //   if (UR(2)) {
+
+        //     u32 pos = UR(temp_len - 1);
+
+        //     *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+
+        //   } else {
+
+        //     u32 pos = UR(temp_len - 1);
+        //     u16 num = 1 + UR(ARITH_MAX);
+
+        //     *(u16*)(out_buf + pos) =
+        //       SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
+
+        //   }
+        //   stage_finds_times[6] += 1;
+        //   break;
         case 6:
+							out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
+							out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
+							stage_finds_times[6] += 1;
+							break;
 
-          /* Randomly subtract from word, random endian. */
+        // case 7:
 
-          if (temp_len < 2) break;
+        //   /* Randomly add to word, random endian. */
 
-          if (UR(2)) {
+        //   if (temp_len < 2) break;
 
-            u32 pos = UR(temp_len - 1);
+        //   if (UR(2)) {
 
-            *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+        //     u32 pos = UR(temp_len - 1);
 
-          } else {
+        //     *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 
-            u32 pos = UR(temp_len - 1);
-            u16 num = 1 + UR(ARITH_MAX);
+        //   } else {
 
-            *(u16*)(out_buf + pos) =
-              SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
+        //     u32 pos = UR(temp_len - 1);
+        //     u16 num = 1 + UR(ARITH_MAX);
 
-          }
-          stage_finds_times[6] += 1;
-          break;
+        //     *(u16*)(out_buf + pos) =
+        //       SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 
+        //   }
+        //   stage_finds_times[7] += 1;
+        //   break;
         case 7:
+							/* Randomly subtract from word, random endian. */
+							if (temp_len < 8) break;
+							if (UR(2)) {
+								u32 pos = UR(temp_len - 1);
+								*(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+							}
+							else {
+								u32 pos = UR(temp_len - 1);
+								u16 num = 1 + UR(ARITH_MAX);
+								*(u16*)(out_buf + pos) =
+									SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
+							}
+							/* Randomly add to word, random endian. */
+							if (UR(2)) {
+								u32 pos = UR(temp_len - 1);
+								*(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
+							}
+							else {
+								u32 pos = UR(temp_len - 1);
+								u16 num = 1 + UR(ARITH_MAX);
+								*(u16*)(out_buf + pos) =
+									SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
+							}
+							stage_finds_times[7] += 1;
+							break;
 
-          /* Randomly add to word, random endian. */
+        // case 8:
 
-          if (temp_len < 2) break;
+        //   /* Randomly subtract from dword, random endian. */
 
-          if (UR(2)) {
+        //   if (temp_len < 4) break;
 
-            u32 pos = UR(temp_len - 1);
+        //   if (UR(2)) {
 
-            *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
+        //     u32 pos = UR(temp_len - 3);
 
-          } else {
+        //     *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 
-            u32 pos = UR(temp_len - 1);
-            u16 num = 1 + UR(ARITH_MAX);
+        //   } else {
 
-            *(u16*)(out_buf + pos) =
-              SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
+        //     u32 pos = UR(temp_len - 3);
+        //     u32 num = 1 + UR(ARITH_MAX);
 
-          }
-          stage_finds_times[7] += 1;
-          break;
+        //     *(u32*)(out_buf + pos) =
+        //       SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
 
+        //   }
+        //   stage_finds_times[8] += 1;
+        //   break;
         case 8:
+							/* Randomly subtract from dword, random endian. */
+							if (temp_len < 8) break;
+							if (UR(2)) {
+								u32 pos = UR(temp_len - 3);
+								*(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+							}
+							else {
+								u32 pos = UR(temp_len - 3);
+								u32 num = 1 + UR(ARITH_MAX);
+								*(u32*)(out_buf + pos) =
+									SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
+							}
+							/* Randomly add to dword, random endian. */
+							//if (temp_len < 4) break;
+							if (UR(2)) {
+								u32 pos = UR(temp_len - 3);
+								*(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
+							}
+							else {
+								u32 pos = UR(temp_len - 3);
+								u32 num = 1 + UR(ARITH_MAX);
+								*(u32*)(out_buf + pos) =
+									SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
+							}
+							stage_finds_times[8] += 1;
+							break;
 
-          /* Randomly subtract from dword, random endian. */
+        // case 9:
 
-          if (temp_len < 4) break;
+        //   /* Randomly add to dword, random endian. */
 
-          if (UR(2)) {
+        //   if (temp_len < 4) break;
 
-            u32 pos = UR(temp_len - 3);
+        //   if (UR(2)) {
 
-            *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
+        //     u32 pos = UR(temp_len - 3);
 
-          } else {
+        //     *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 
-            u32 pos = UR(temp_len - 3);
-            u32 num = 1 + UR(ARITH_MAX);
+        //   } else {
 
-            *(u32*)(out_buf + pos) =
-              SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
+        //     u32 pos = UR(temp_len - 3);
+        //     u32 num = 1 + UR(ARITH_MAX);
 
-          }
-          stage_finds_times[8] += 1;
-          break;
+        //     *(u32*)(out_buf + pos) =
+        //       SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 
+        //   }
+        //   stage_finds_times[9] += 1;
+        //   break;
         case 9:
+							/* Set byte to interesting value. */
+							if (temp_len < 4) break;
+							out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
+							stage_finds_times[9] += 1;
+							break;
 
-          /* Randomly add to dword, random endian. */
+        // case 10:
 
-          if (temp_len < 4) break;
+        //   /* Just set a random byte to a random value. Because,
+        //      why not. We use XOR with 1-255 to eliminate the
+        //      possibility of a no-op. */
 
-          if (UR(2)) {
-
-            u32 pos = UR(temp_len - 3);
-
-            *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
-
-          } else {
-
-            u32 pos = UR(temp_len - 3);
-            u32 num = 1 + UR(ARITH_MAX);
-
-            *(u32*)(out_buf + pos) =
-              SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
-
-          }
-          stage_finds_times[9] += 1;
-          break;
-
+        //   out_buf[UR(temp_len)] ^= 1 + UR(255);
+        //   stage_finds_times[10] += 1;
+        //   break;
         case 10:
+							/* Set word to interesting value, randomly choosing endian. */
+							if (temp_len < 8) break;
+							if (UR(2)) {
+								*(u16*)(out_buf + UR(temp_len - 1)) =
+									interesting_16[UR(sizeof(interesting_16) >> 1)];
+							}
+							else {
+								*(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
+									interesting_16[UR(sizeof(interesting_16) >> 1)]);
+							}
+							stage_finds_times[10] += 1;
+							break;
 
-          /* Just set a random byte to a random value. Because,
-             why not. We use XOR with 1-255 to eliminate the
-             possibility of a no-op. */
+        // case 11 ... 12: {
 
-          out_buf[UR(temp_len)] ^= 1 + UR(255);
-          stage_finds_times[10] += 1;
-          break;
+        //     /* Delete bytes. We're making this a bit more likely
+        //        than insertion (the next option) in hopes of keeping
+        //        files reasonably small. */
 
-        case 11 ... 12: {
+        //     u32 del_from, del_len;
 
-            /* Delete bytes. We're making this a bit more likely
-               than insertion (the next option) in hopes of keeping
-               files reasonably small. */
+        //     if (temp_len < 2) break;
 
-            u32 del_from, del_len;
+        //     /* Don't delete too much. */
 
-            if (temp_len < 2) break;
+        //     del_len = choose_block_len(temp_len - 1);
 
-            /* Don't delete too much. */
+        //     del_from = UR(temp_len - del_len + 1);
 
-            del_len = choose_block_len(temp_len - 1);
+        //     memmove(out_buf + del_from, out_buf + del_from + del_len,
+        //             temp_len - del_from - del_len);
 
-            del_from = UR(temp_len - del_len + 1);
+        //     temp_len -= del_len;
+        //     stage_finds_times[11] += 1;
+        //     stage_finds_times[12] += 1;
+        //     break;
 
-            memmove(out_buf + del_from, out_buf + del_from + del_len,
-                    temp_len - del_from - del_len);
+        //   }
+        case 11:
+							/* Set dword to interesting value, randomly choosing endian. */
 
-            temp_len -= del_len;
-            stage_finds_times[11] += 1;
-            stage_finds_times[12] += 1;
-            break;
+							if (temp_len < 8) break;
 
-          }
+							if (UR(2)) {
+								*(u32*)(out_buf + UR(temp_len - 3)) =
+									interesting_32[UR(sizeof(interesting_32) >> 2)];
+							}
+							else {
+								*(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
+									interesting_32[UR(sizeof(interesting_32) >> 2)]);
+							}
+							 stage_finds_times[11] += 1;
+							break;
+        case 12:
 
-        case 13:
+							/* Just set a random byte to a random value. Because,
+							   why not. We use XOR with 1-255 to eliminate the
+							   possibility of a no-op. */
 
-          if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
+							out_buf[UR(temp_len)] ^= 1 + UR(255);
+							 stage_finds_times[12] += 1;
+							break;
 
-            /* Clone bytes (75%) or insert a block of constant bytes (25%). */
+        // case 13:
 
-            u8  actually_clone = UR(4);
-            u32 clone_from, clone_to, clone_len;
-            u8* new_buf;
+        //   if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
 
-            if (actually_clone) {
+        //     /* Clone bytes (75%) or insert a block of constant bytes (25%). */
 
-              clone_len  = choose_block_len(temp_len);
-              clone_from = UR(temp_len - clone_len + 1);
+        //     u8  actually_clone = UR(4);
+        //     u32 clone_from, clone_to, clone_len;
+        //     u8* new_buf;
 
-            } else {
+        //     if (actually_clone) {
 
-              clone_len = choose_block_len(HAVOC_BLK_XL);
-              clone_from = 0;
+        //       clone_len  = choose_block_len(temp_len);
+        //       clone_from = UR(temp_len - clone_len + 1);
 
-            }
+        //     } else {
 
-            clone_to   = UR(temp_len);
+        //       clone_len = choose_block_len(HAVOC_BLK_XL);
+        //       clone_from = 0;
 
-            new_buf = ck_alloc_nozero(temp_len + clone_len);
+        //     }
 
-            /* Head */
+        //     clone_to   = UR(temp_len);
 
-            memcpy(new_buf, out_buf, clone_to);
+        //     new_buf = ck_alloc_nozero(temp_len + clone_len);
 
-            /* Inserted part */
+        //     /* Head */
 
-            if (actually_clone)
-              memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
-            else
-              memset(new_buf + clone_to,
-                     UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
+        //     memcpy(new_buf, out_buf, clone_to);
 
-            /* Tail */
-            memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
-                   temp_len - clone_to);
+        //     /* Inserted part */
 
-            ck_free(out_buf);
-            out_buf = new_buf;
-            temp_len += clone_len;
+        //     if (actually_clone)
+        //       memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
+        //     else
+        //       memset(new_buf + clone_to,
+        //              UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
 
-          }
-          stage_finds_times[13] += 1;
-          break;
+        //     /* Tail */
+        //     memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
+        //            temp_len - clone_to);
 
-        case 14: {
+        //     ck_free(out_buf);
+        //     out_buf = new_buf;
+        //     temp_len += clone_len;
 
-            /* Overwrite bytes with a randomly selected chunk (75%) or fixed
-               bytes (25%). */
+        //   }
+        //   stage_finds_times[13] += 1;
+        //   break;
+              case 13: {
 
-            u32 copy_from, copy_to, copy_len;
+							/* Delete bytes. We're making this a bit more likely
+							   than insertion (the next option) in hopes of keeping
+							   files reasonably small. */
 
-            if (temp_len < 2) break;
+							u32 del_from, del_len;
 
-            copy_len  = choose_block_len(temp_len - 1);
+							if (temp_len < 2) break;
 
-            copy_from = UR(temp_len - copy_len + 1);
-            copy_to   = UR(temp_len - copy_len + 1);
+							/* Don't delete too much. */
 
-            if (UR(4)) {
+							del_len = choose_block_len(temp_len - 1);
 
-              if (copy_from != copy_to)
-                memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
+							del_from = UR(temp_len - del_len + 1);
 
-            } else memset(out_buf + copy_to,
-                          UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
+							memmove(out_buf + del_from, out_buf + del_from + del_len,
+								temp_len - del_from - del_len);
+
+							temp_len -= del_len;
+							stage_finds_times[13] += 1;
+							break;
+
+						}
+        // case 14: {
+
+        //     /* Overwrite bytes with a randomly selected chunk (75%) or fixed
+        //        bytes (25%). */
+
+        //     u32 copy_from, copy_to, copy_len;
+
+        //     if (temp_len < 2) break;
+
+        //     copy_len  = choose_block_len(temp_len - 1);
+
+        //     copy_from = UR(temp_len - copy_len + 1);
+        //     copy_to   = UR(temp_len - copy_len + 1);
+
+        //     if (UR(4)) {
+
+        //       if (copy_from != copy_to)
+        //         memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
+
+        //     } else memset(out_buf + copy_to,
+        //                   UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
             
-            stage_finds_times[14] += 1;
-            break;
+        //     stage_finds_times[14] += 1;
+        //     break;
 
-          }
+        //   }
+            case 14:
+
+							if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
+
+								/* Clone bytes (75%) or insert a block of constant bytes (25%). */
+
+								u8  actually_clone = UR(4);
+								u32 clone_from, clone_to, clone_len;
+								u8* new_buf;
+
+								if (actually_clone) {
+
+									clone_len = choose_block_len(temp_len);
+									clone_from = UR(temp_len - clone_len + 1);
+
+								}
+								else {
+
+									clone_len = choose_block_len(HAVOC_BLK_XL);
+									clone_from = 0;
+
+								}
+
+								clone_to = UR(temp_len);
+
+								new_buf = ck_alloc_nozero(temp_len + clone_len);
+
+								/* Head */
+
+								memcpy(new_buf, out_buf, clone_to);
+
+								/* Inserted part */
+
+								if (actually_clone)
+									memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
+								else
+									memset(new_buf + clone_to,
+										UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
+
+								/* Tail */
+								memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
+									temp_len - clone_to);
+
+								ck_free(out_buf);
+								out_buf = new_buf;
+								temp_len += clone_len;
+								stage_finds_times[14] += 1;
+							}
+
+							break;
 
         /* Values 15 and 16 can be selected only if there are any extras
            present in the dictionaries. */
 
-        case 15: {
+        // case 15: {
 
-            /* Overwrite bytes with an extra. */
+        //     /* Overwrite bytes with an extra. */
 
-            if (!extras_cnt || (a_extras_cnt && UR(2))) {
+        //     if (!extras_cnt || (a_extras_cnt && UR(2))) {
 
-              /* No user-specified extras or odds in our favor. Let's use an
-                 auto-detected one. */
+        //       /* No user-specified extras or odds in our favor. Let's use an
+        //          auto-detected one. */
 
-              u32 use_extra = UR(a_extras_cnt);
-              u32 extra_len = a_extras[use_extra].len;
-              u32 insert_at;
+        //       u32 use_extra = UR(a_extras_cnt);
+        //       u32 extra_len = a_extras[use_extra].len;
+        //       u32 insert_at;
 
-              if (extra_len > temp_len) break;
+        //       if (extra_len > temp_len) break;
 
-              insert_at = UR(temp_len - extra_len + 1);
-              memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
+        //       insert_at = UR(temp_len - extra_len + 1);
+        //       memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
 
-            } else {
+        //     } else {
 
-              /* No auto extras or odds in our favor. Use the dictionary. */
+        //       /* No auto extras or odds in our favor. Use the dictionary. */
 
-              u32 use_extra = UR(extras_cnt);
-              u32 extra_len = extras[use_extra].len;
-              u32 insert_at;
+        //       u32 use_extra = UR(extras_cnt);
+        //       u32 extra_len = extras[use_extra].len;
+        //       u32 insert_at;
 
-              if (extra_len > temp_len) break;
+        //       if (extra_len > temp_len) break;
 
-              insert_at = UR(temp_len - extra_len + 1);
-              memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
+        //       insert_at = UR(temp_len - extra_len + 1);
+        //       memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
 
-            }
-            stage_finds_times[15] += 1;
-            break;
+        //     }
+        //     stage_finds_times[15] += 1;
+        //     break;
 
-          }
+        //   }
+              case 15: {
 
+							/* Overwrite bytes with a randomly selected chunk (75%) or fixed
+							   bytes (25%). */
+
+							u32 copy_from, copy_to, copy_len;
+
+							if (temp_len < 2) break;
+
+							copy_len = choose_block_len(temp_len - 1);
+
+							copy_from = UR(temp_len - copy_len + 1);
+							copy_to = UR(temp_len - copy_len + 1);
+
+							if (UR(4)) {
+
+								if (copy_from != copy_to)
+									memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
+
+							}
+							else memset(out_buf + copy_to,
+								UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
+							 stage_finds_times[15] += 1;
+							break;
+
+						}
+
+        // case 16: {
+
+        //     u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
+        //     u8* new_buf;
+
+        //     /* Insert an extra. Do the same dice-rolling stuff as for the
+        //        previous case. */
+
+        //     if (!extras_cnt || (a_extras_cnt && UR(2))) {
+
+        //       use_extra = UR(a_extras_cnt);
+        //       extra_len = a_extras[use_extra].len;
+
+        //       if (temp_len + extra_len >= MAX_FILE) break;
+
+        //       new_buf = ck_alloc_nozero(temp_len + extra_len);
+
+        //       /* Head */
+        //       memcpy(new_buf, out_buf, insert_at);
+
+        //       /* Inserted part */
+        //       memcpy(new_buf + insert_at, a_extras[use_extra].data, extra_len);
+
+        //     } else {
+
+        //       use_extra = UR(extras_cnt);
+        //       extra_len = extras[use_extra].len;
+
+        //       if (temp_len + extra_len >= MAX_FILE) break;
+
+        //       new_buf = ck_alloc_nozero(temp_len + extra_len);
+
+        //       /* Head */
+        //       memcpy(new_buf, out_buf, insert_at);
+
+        //       /* Inserted part */
+        //       memcpy(new_buf + insert_at, extras[use_extra].data, extra_len);
+
+        //     }
+
+        //     /* Tail */
+        //     memcpy(new_buf + insert_at + extra_len, out_buf + insert_at,
+        //            temp_len - insert_at);
+
+        //     ck_free(out_buf);
+        //     out_buf   = new_buf;
+        //     temp_len += extra_len;
+            
+        //     stage_finds_times[16] += 1;
+        //     break;
+
+        //   }
         case 16: {
 
-            u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
-            u8* new_buf;
+                  /* Overwrite bytes with an extra. */
 
-            /* Insert an extra. Do the same dice-rolling stuff as for the
-               previous case. */
+                  if (!extras_cnt || (a_extras_cnt && UR(2))) {
 
-            if (!extras_cnt || (a_extras_cnt && UR(2))) {
+                  /* No user-specified extras or odds in our favor. Let's use an
+                    auto-detected one. */
 
-              use_extra = UR(a_extras_cnt);
-              extra_len = a_extras[use_extra].len;
+                  u32 use_extra = UR(a_extras_cnt);
+                  u32 extra_len = a_extras[use_extra].len;
+                  u32 insert_at;
 
-              if (temp_len + extra_len >= MAX_FILE) break;
+                  if (extra_len > temp_len) break;
 
-              new_buf = ck_alloc_nozero(temp_len + extra_len);
+                  insert_at = UR(temp_len - extra_len + 1);
+                  memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
 
-              /* Head */
-              memcpy(new_buf, out_buf, insert_at);
+                  } else {
 
-              /* Inserted part */
-              memcpy(new_buf + insert_at, a_extras[use_extra].data, extra_len);
+                  /* No auto extras or odds in our favor. Use the dictionary. */
 
-            } else {
+                  u32 use_extra = UR(extras_cnt);
+                  u32 extra_len = extras[use_extra].len;
+                  u32 insert_at;
 
-              use_extra = UR(extras_cnt);
-              extra_len = extras[use_extra].len;
+                  if (extra_len > temp_len) break;
 
-              if (temp_len + extra_len >= MAX_FILE) break;
+                  insert_at = UR(temp_len - extra_len + 1);
+                  memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
 
-              new_buf = ck_alloc_nozero(temp_len + extra_len);
-
-              /* Head */
-              memcpy(new_buf, out_buf, insert_at);
-
-              /* Inserted part */
-              memcpy(new_buf + insert_at, extras[use_extra].data, extra_len);
+                  }
+                  stage_finds_times[16] += 1;
+                  break;
 
             }
 
-            /* Tail */
-            memcpy(new_buf + insert_at + extra_len, out_buf + insert_at,
-                   temp_len - insert_at);
+        case 17: {
 
-            ck_free(out_buf);
-            out_buf   = new_buf;
-            temp_len += extra_len;
-            
-            stage_finds_times[16] += 1;
-            break;
+                  u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
+                  u8* new_buf;
 
-          }
+                  /* Insert an extra. Do the same dice-rolling stuff as for the
+                    previous case. */
+
+                  if (!extras_cnt || (a_extras_cnt && UR(2))) {
+
+                  use_extra = UR(a_extras_cnt);
+                  extra_len = a_extras[use_extra].len;
+
+                  if (temp_len + extra_len >= MAX_FILE) break;
+
+                  new_buf = ck_alloc_nozero(temp_len + extra_len);
+
+                  /* Head */
+                  memcpy(new_buf, out_buf, insert_at);
+
+                  /* Inserted part */
+                  memcpy(new_buf + insert_at, a_extras[use_extra].data, extra_len);
+
+                  } else {
+
+                  use_extra = UR(extras_cnt);
+                  extra_len = extras[use_extra].len;
+
+                  if (temp_len + extra_len >= MAX_FILE) break;
+
+                  new_buf = ck_alloc_nozero(temp_len + extra_len);
+
+                  /* Head */
+                  memcpy(new_buf, out_buf, insert_at);
+
+                  /* Inserted part */
+                  memcpy(new_buf + insert_at, extras[use_extra].data, extra_len);
+
+                  }
+
+                  /* Tail */
+                  memcpy(new_buf + insert_at + extra_len, out_buf + insert_at,
+                  temp_len - insert_at);
+
+                  ck_free(out_buf);
+                  out_buf   = new_buf;
+                  temp_len += extra_len;
+                  stage_finds_times[17] += 1;
+                  break;
+
+            }
 
       }
 
@@ -8508,20 +8837,35 @@ havoc_stage:
 
     }
      
-    
+    //更新
+    for (int i=0;i<operator_num;i++){
+          stage_finds_per_times[i]=0.0; //每轮算子使用次数清零
+          stage_finds_score_this_turn[i]=0.0; //每轮算子分数清零
+          stage_finds_per_score[i]=0.0; //每轮算子平均分数清零
+      }
+
     //更新变异算子概率分布
     if (unlikely(queued_paths + unique_crashes > temp_total_found))
-      { 
-            if((prox_score_after-prox_score_before>0) && (prox_score_before>0) && (prox_score_after>0)){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
+      {  
+            if((prox_score_after>prox_score_before) ){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
               // u64 temp_temp_puppet = queued_paths + unique_crashes - temp_total_found;
+              fprintf(fp,"\nprox_score_after-prox_score_before>0\n");
               u64 new_add_score = prox_score_after-prox_score_before;
+              // fprintf(fp,"\nnew_add_score %lld\n",new_add_score);
               // total_puppet_find = total_puppet_find + temp_temp_puppet;
               for (i = 0; i < operator_num; i++)
               {
                 if (stage_finds_times[i] > stage_finds_times_origin[i]){//说明这个算子这轮用过
+                  stage_finds_per_times[i]= stage_finds_times[i]-stage_finds_times_origin[i];//表示这轮用过的算子次数
+                  // fprintf(fp,"\nstage_finds_times[i] > stage_finds_times_origin[i]\n");
                   stage_finds_score[i] += new_add_score;
-                  if( stage_finds_times[i] > 0)
-                    stage_finds_per_score[i]= stage_finds_score[i] /stage_finds_times[i];  //同时更新其平均增益
+                  stage_finds_score_this_turn[i]=new_add_score; //记录这轮算子增加的分数
+                  // fprintf(fp,"\nstage_finds_times[i]: %lzld n",stage_finds_times[i]);
+                  if( stage_finds_per_times[i] > 0){
+                     stage_finds_per_score[i]= stage_finds_score_this_turn[i] /stage_finds_per_times[i];  //同时更新其平均增益
+                    stage_finds_score_all[i]+=stage_finds_per_score[i];//累计增益
+                  }
+                   
                 }
               }
             }
@@ -8531,13 +8875,25 @@ havoc_stage:
        for (int i=0;i<operator_num;i++){
         	fprintf(fp,"%lf ",stage_finds_score[i]);
        }
+       fprintf(fp,"\n stage_finds_times:\n");
+       for (int i=0;i<operator_num;i++){
+        	fprintf(fp,"%lf ",stage_finds_times[i]);
+       }
        fprintf(fp,"\n stage_finds_per_score:\n");
        for (int i=0;i<operator_num;i++){
         	fprintf(fp,"%lf ",stage_finds_per_score[i]);
        }
-       fprintf(fp,"\n stage_finds_times:\n");
+       fprintf(fp,"\n stage_finds_per_times:\n");
        for (int i=0;i<operator_num;i++){
-        	fprintf(fp,"%lld ",stage_finds_times[i]);
+        	fprintf(fp,"%lf ",stage_finds_per_times[i]);
+       }
+       fprintf(fp,"\n stage_finds_score_this_turn:\n");
+       for (int i=0;i<operator_num;i++){
+        	fprintf(fp,"%lf ",stage_finds_score_this_turn[i]);
+       }
+       fprintf(fp,"\n stage_finds_score_all:\n");
+       for (int i=0;i<operator_num;i++){
+        	fprintf(fp,"%lf ",stage_finds_score_all[i]);
        }
       
   }
@@ -8690,7 +9046,7 @@ double fitfun(const double *y, int N) {
   double weighted_score = 0.0;
   for (int i = 0; i < N; ++i) {
     double pi = exp(y[i] - max_y) / sum_exp;
-    weighted_score += pi * stage_finds_per_score[i];
+    weighted_score += pi * stage_finds_score_all[i];//使用累计增益更新
   }
   return -weighted_score;
 }
@@ -10192,9 +10548,19 @@ int main(int argc, char** argv) {
     //初始化全局变量用于后续核心模块调度
     for (int i = 0; i < operator_num; i++)
       {
-          stage_finds_times[i] = 0;
-          stage_finds_times_origin[i]=0;
+          stage_finds_times[i] = 0.0;
+          stage_finds_times_origin[i]=0.0;
+          stage_finds_score[i]=0.0;
+          stage_finds_per_score[i]=0.0;
+          stage_finds_per_times[i]=0.0;
+          stage_finds_score_this_turn[i]=0.0;
+          stage_finds_score_all[i]=0.0;
       }
+      fprintf(fp,"\n --init---stage_finds_score:\n");
+       for (int i=0;i<operator_num;i++){
+        	fprintf(fp,"%lf ",stage_finds_score[i]);
+       }
+
     arFunvals = cmaes_init(&evo, operator_num, operator_prob, sigma, 0, 0, NULL);
     fprintf(fp,"\n %s\n", cmaes_SayHello(&evo));
     //int lambda = 100; // offsprings at each generation.

@@ -95,3 +95,260 @@
  -- Tue Jul 15 13:16:12 2025
  Warning: sigma increased due to equal function values
     Reconsider the formulation of the objective function
+
+ -- Sun Jul 20 07:34:55 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Sun Jul 20 07:35:40 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Sun Jul 20 07:36:14 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Sun Jul 20 07:36:58 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Sun Jul 20 07:37:19 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Sun Jul 20 07:37:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Sun Jul 20 07:37:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Sun Jul 20 07:37:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Sun Jul 20 07:37:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Sun Jul 20 07:37:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Sun Jul 20 07:37:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:10:23 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 02:10:36 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:10:36 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:10:36 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:10:36 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:10:36 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:10:36 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:28 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:19:41 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:36 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 02:43:46 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 03:14:21 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 03:14:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:22:57 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:23:10 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 04:32:40 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 04:32:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 05:05:34 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 05:05:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 05:05:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 05:05:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 05:05:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 05:05:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 05:05:49 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 10:39:22 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 10:39:37 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 10:39:37 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 10:39:37 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 10:39:37 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 10:39:37 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 10:39:37 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 11:46:57 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 11:47:12 2025
+ cmaes_ReadFromFile(): could not open ' cmaes_initials.par '
+
+ -- Mon Jul 21 11:47:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 11:47:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 11:47:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 11:47:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 11:47:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
+
+ -- Mon Jul 21 11:47:29 2025
+ Warning: sigma increased due to equal function values
+    Reconsider the formulation of the objective function
