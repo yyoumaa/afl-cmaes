@@ -125,6 +125,7 @@ static double  stage_finds_times[operator_num],//每个算子变异前执行次�
 
 
 FILE *fp;
+time_t timer;
 
 EXP_ST u8 *in_dir,                    /* Input directory with test cases  */
           *out_file,                  /* File to fuzz, if any             */
@@ -8081,7 +8082,7 @@ havoc_stage:
   s32 temp_len_puppet;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) { //每循环一轮这个，更新算子增加分数
-    fprintf(fp,"\nfor (stage_cur = 0; stage_cur < stage_max; stage_cur++) {\n");
+    // fprintf(fp,"\nfor (stage_cur = 0; stage_cur < stage_max; stage_cur++) {\n");
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
@@ -8096,8 +8097,8 @@ havoc_stage:
 
       // switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
       int opt_case=select_algorithm( extras_cnt + a_extras_cnt );
-      fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
-      fprintf(fp,"%d %d\n",i,opt_case);
+      // fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
+      // fprintf(fp,"%d %d\n",i,opt_case);
       switch (opt_case) {
         // case 0:
 
@@ -8847,9 +8848,14 @@ havoc_stage:
     //更新变异算子概率分布
     if (unlikely(queued_paths + unique_crashes > temp_total_found))
       {  
+            fprintf(fp,"\nqueued_paths + unique_crashes > temp_total_found\n");
             if((prox_score_after>prox_score_before) ){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
               // u64 temp_temp_puppet = queued_paths + unique_crashes - temp_total_found;
               fprintf(fp,"\nprox_score_after-prox_score_before>0\n");
+               time(&timer);
+               long seconds = (long)timer;
+              fprintf(fp,"%ld\n",seconds);
+             
               u64 new_add_score = prox_score_after-prox_score_before;
               // fprintf(fp,"\nnew_add_score %lld\n",new_add_score);
               // total_puppet_find = total_puppet_find + temp_temp_puppet;
@@ -8869,7 +8875,9 @@ havoc_stage:
                 }
               }
             }
-            
+            else{//<0
+              fprintf(fp,"\nprox_score_after-prox_score_before<0\n");
+            }     
        }
        fprintf(fp,"\n stage_finds_score:\n");
        for (int i=0;i<operator_num;i++){
@@ -8899,6 +8907,11 @@ havoc_stage:
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
+  
+  time(&timer);
+  long seconds = (long)timer;
+
+  fprintf(fp,"\nnew_hit_cnt %lld %ld\n",new_hit_cnt,seconds);
 
   if (!splice_cycle) {
     stage_finds[STAGE_HAVOC]  += new_hit_cnt - orig_hit_cnt;
@@ -9048,32 +9061,142 @@ double fitfun(const double *y, int N) {
     double pi = exp(y[i] - max_y) / sum_exp;
     weighted_score += pi * stage_finds_score_all[i];//使用累计增益更新
   }
+
   return -weighted_score;
 }
 
-void cma_updating(void) {
+// double fitfun(const double *y, int N) {
+//    // 1. 计算当前候选解y对应的概率分布
+//   double max_y = y[0];
+//   for (int i = 1; i < N; ++i) 
+//     if (y[i] > max_y) max_y = y[i];
+  
+//   double sum_exp = 0.0;
+//   for (int i = 0; i < N; ++i)
+//     sum_exp += exp(y[i] - max_y);
+  
+//   // 2. 平滑处理性能指标（使用总增益）
+//   double max_score = 0;
+//   for (int i = 0; i < N; ++i) {
+//     if (stage_finds_score_all[i] > max_score) 
+//       max_score = stage_finds_score_all[i];
+//   }
+  
+//   // 3. 计算加权得分（关键修正）
+//   double weighted_score = 0.0;
+//   for (int i = 0; i < N; ++i) {
+//     // 当前候选解的概率分量
+//     double pi = exp(y[i] - max_y) / sum_exp;
+    
+//     // 相对性能比率 (0~1]
+//     double relative_perf = stage_finds_score_all[i] / max_score;
+    
+//     // 非线性平滑处理（降低差异）
+//     double adjusted_perf = sqrt(relative_perf);
+    
+//     // 累积加权得分
+//     weighted_score += pi * adjusted_perf;
+//   }
+  
+//   // 4. CMA-ES最小化目标，返回负值
+//   return -weighted_score;
+// }
 
-    while (!cmaes_TestForTermination(&evo)) {
-      double *const* pop = cmaes_SamplePopulation(&evo);
-      for (int i = 0; i < cmaes_Get(&evo, "lambda"); ++i)
+// double fitfun(const double *y, int N) {
+//   // 1. 计算当前候选解y对应的概率分布
+//   double max_y = y[0];
+//   for (int i = 1; i < N; ++i) 
+//     if (y[i] > max_y) max_y = y[i];
+  
+//   double sum_exp = 0.0;
+//   for (int i = 0; i < N; ++i)
+//     sum_exp += exp(y[i] - max_y);
+  
+//   // 2. 计算性能指标的秩（rank-based）
+//   // 创建索引数组和排名数组
+//   int indices[N];
+//   int ranks[N]; // 存储每个算子的排名
+  
+//   for (int i = 0; i < N; ++i) {
+//     indices[i] = i;
+//     ranks[i] = 0; // 初始化排名
+//   }
+  
+//   // 按性能排序（降序）
+//   for (int i = 0; i < N-1; ++i) {
+//     for (int j = i+1; j < N; ++j) {
+//       if (stage_finds_score_all[indices[j]] > stage_finds_score_all[indices[i]]) {
+//         int temp = indices[i];
+//         indices[i] = indices[j];
+//         indices[j] = temp;
+//       }
+//     }
+//   }
+  
+//   // 分配排名（最高分排名0，最低分排名N-1）
+//   for (int rank = 0; rank < N; rank++) {
+//     ranks[indices[rank]] = rank;
+//   }
+  
+//   // 3. 基于秩计算加权得分
+//   double weighted_score = 0.0;
+//   for (int i = 0; i < N; ++i) {
+//     // 当前候选解的概率分量
+//     double pi = exp(y[i] - max_y) / sum_exp;
+    
+//     // 计算秩得分（最高性能得1.0，最低得0.1）
+//     double rank_score = 1.0 - (0.9 * ranks[i]) / (N-1);
+    
+//     // 累积加权得分
+//     weighted_score += pi * rank_score;
+//   }
+  
+//   // 4. CMA-ES最小化目标，返回负值
+//   return -weighted_score;
+// }
+
+void cma_updating(void) {
+  fprintf(fp,"\nbiaoji\n");
+    // while (!cmaes_TestForTermination(&evo)) {
+    //   double *const* pop = cmaes_SamplePopulation(&evo);
+    //   for (int i = 0; i < cmaes_Get(&evo, "lambda"); ++i)
+    //     arFunvals[i] = fitfun(pop[i], operator_num);
+    //   cmaes_UpdateDistribution(&evo, arFunvals);
+    // }
+
+    // 只更新一代，而不是运行到收敛
+    double *const* pop = cmaes_SamplePopulation(&evo);
+    for (int i = 0; i < cmaes_Get(&evo, "lambda"); ++i)
         arFunvals[i] = fitfun(pop[i], operator_num);
-      cmaes_UpdateDistribution(&evo, arFunvals);
-    }
+    cmaes_UpdateDistribution(&evo, arFunvals);
+
 
     fprintf(fp,"\n------cma_updating------\n\n operator_prob: ");
-    const double *xopt = cmaes_GetNew(&evo, "xmean");
+    // const double *xopt = cmaes_GetNew(&evo, "xmean");
+    // 获取当前均值（不要用GetNew，用GetPtr避免内存分配）
+    const double *xopt = cmaes_GetPtr(&evo, "xmean");
     double sum_exp= 0.0;
+    double max_x = xopt[0];
+    for (int i = 1; i < operator_num; ++i)
+        if (xopt[i] > max_x) max_x = xopt[i];
+
     for (int i = 0; i < operator_num; ++i)
-      sum_exp += exp(xopt[i]);
-    for (int i = 0; i < operator_num; ++i){
-      operator_prob[i] = exp(xopt[i]) / sum_exp;
-      fprintf(fp,"%lf ",operator_prob[i]);
+        sum_exp += exp(xopt[i] - max_x);  // 数值稳定
+    for (int i = 0; i < operator_num; ++i) {
+        operator_prob[i] = exp(xopt[i] - max_x) / sum_exp;
+        fprintf(fp, "%lf ", operator_prob[i]);
     }
       
-    free((void*)xopt);
+    // free((void*)xopt);
+    fprintf(fp,"\n------cma_updating------\n\n probability_now: ");
+    for (int i = 0; i < operator_num; ++i){
+      fprintf(fp,"%lf ",probability_now[i]);
+    }
+    
+   
 
     //根据operator_prob更新probability_now
-    fprintf(fp,"\n------cma_updating------\n\n probability_now: ");
+    fprintf(fp,"\n------cma_updating------\n\n revise probability_now: ");
     for (int i = 0; i < operator_num; i++)
 		{
 			if (likely(i != 0))//likely是对跳转指令的优化,执行的概率大
@@ -10499,7 +10622,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < operator_num; ++i) {
       double value=0.5;
       operator_prob[i] =value;    // 例如均匀或已有分布
-      sigma[i] = 0.1;                  // 初始标准差
+      sigma[i] = 0.01;                 // 初始标准差
       total_operator_prob+=value;
       fprintf(fp,"%lf ",operator_prob[i]);
     }
@@ -10561,7 +10684,15 @@ int main(int argc, char** argv) {
         	fprintf(fp,"%lf ",stage_finds_score[i]);
        }
 
-    arFunvals = cmaes_init(&evo, operator_num, operator_prob, sigma, 0, 0, NULL);
+    // 使用参数初始化 CMA-ES (关键修改)
+    // cmaes_readpara_t rp;
+    // cmaes_readpara_init(&rp, operator_num, operator_prob, sigma, 
+    //                     0, 100, NULL); // lambda=100
+    // cmaes_readpara_SetWeights(&rp, "log");    // 使用对数权重（更平缓）
+
+    arFunvals = (cmaes_init)(&evo, operator_num, operator_prob, sigma, 0, 0, NULL);
+    // cmaes_readpara_exit(&rp);
+
     fprintf(fp,"\n %s\n", cmaes_SayHello(&evo));
     //int lambda = 100; // offsprings at each generation.
     //CMAParameters cmaparams(dim,lambda);
