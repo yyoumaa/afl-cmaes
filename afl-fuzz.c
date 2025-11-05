@@ -6906,12 +6906,68 @@ abandon_entry:
 
 }
 
+/* position_revise 的容量管理与同步操作 */
+
+static inline void posrev_ensure_cap(s32 **arr, s32 *cap, u32 need) {
+  if ((s32)need <= *cap) return;
+
+  s32 new_cap = *cap > 0 ? *cap : 64;   /* 初始给个 64，也可用 need */
+  while ((u32)new_cap < need) {
+    if (new_cap > (1 << 27)) break;     /* 防溢出保护，可选 */
+    new_cap <<= 1;
+  }
+
+  *arr = ck_realloc(*arr, (size_t)new_cap * sizeof(**arr));
+
+  /* 将新扩张出来的区域初始化为 -1 */
+  for (s32 i = *cap; i < new_cap; ++i) (*arr)[i] = -1;
+
+  *cap = new_cap;
+}
+
+static inline void posrev_init_round(s32 **arr, s32 *cap, u32 cur_len) {
+  posrev_ensure_cap(arr, cap, cur_len);
+  for (u32 i = 0; i < cur_len; ++i) (*arr)[i] = -1;
+}
+
+/* 在字节位置 at 处插入 n 个新槽位，并把它们全部标记为 tag。
+   len_io 为“逻辑长度”（通常等于 temp_len），本函数会把它加 n。 */
+static inline void posrev_insert(s32 **arr, s32 *cap,
+                                 u32 at, u32 n, s32 tag, u32 *len_io) {
+  if (n == 0) return;
+  posrev_ensure_cap(arr, cap, *len_io + n);
+
+  memmove((*arr) + at + n, (*arr) + at,
+          (size_t)(*len_io - at) * sizeof(**arr));
+
+  for (u32 k = 0; k < n; ++k) (*arr)[at + k] = tag;
+
+  *len_io += n;
+}
+
+/* 从字节位置 at 开始删除 n 个槽位。
+   len_io 为“逻辑长度”（通常等于 temp_len），本函数会把它减 n。 */
+static inline void posrev_delete(s32 *arr, u32 at, u32 n, u32 *len_io) {
+  if (n == 0) return;
+
+  memmove(arr + at, arr + at + n,
+          (size_t)(*len_io - at - n) * sizeof(*arr));
+
+  /* 将尾部被“缩短”的区域置为 -1（可选，但便于调试） */
+  for (u32 i = (*len_io - n); i < *len_io; ++i) arr[i] = -1;
+
+  *len_io -= n;
+}
+
+
 static u8 cma_fuzz_one(char** argv) {
 
   s32 len, fd, temp_len, i, j;
   u8  *in_buf, *out_buf, *orig_in, *ex_tmp, *eff_map = 0;
   u64 havoc_queued,  orig_hit_cnt, new_hit_cnt;
   u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
+
+  fprintf(fp,"\n-----------next case----------\n");//表明换了case，下面的位置在同一个case上才有参考价值
 
  struct queue_entry* target; // Target test case to splice with.
 
@@ -8080,9 +8136,22 @@ havoc_stage:
    fprintf(fp,"\nu64 prox_score_before_before = %lld\n", prox_score_before_before);
 
   s32 temp_len_puppet;
+  // s32 len_for_pos=len;
+  // s32 position_revise[len_for_pos];//初始化位置更改数组
+  s32 *position_revise = NULL;
+  s32  posrev_cap = 0;           /* 新增：容量 */
+  u32  posrev_len_view;          /* 新增：与 temp_len 同步的“逻辑长度视图” */
+
+  /* 初次分配（函数开头处）：用当前 len 作为初始容量，或给个保守值 */
+  posrev_cap = (s32)(len > 0 ? len : 64);
+  position_revise = ck_alloc_nozero((size_t)posrev_cap * sizeof(*position_revise));
+  for (s32 i = 0; i < posrev_cap; ++i) position_revise[i] = -1;
+
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) { //每循环一轮这个，更新算子增加分数
-    // fprintf(fp,"\nfor (stage_cur = 0; stage_cur < stage_max; stage_cur++) {\n");
+    
+    posrev_len_view = (u32)temp_len;               /* 让视图与当前 temp_len 对齐 */
+    posrev_init_round(&position_revise, &posrev_cap, posrev_len_view);
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
@@ -8107,12 +8176,15 @@ havoc_stage:
         //   FLIP_BIT(out_buf, UR(temp_len << 3));
         //   stage_finds_times[0] += 1;
         //   break;
-        case 0:
+        case 0:{
 							/* Flip a single bit somewhere. Spooky! */
-							FLIP_BIT(out_buf, UR(temp_len << 3));
+              u32 bit = UR(temp_len << 3);
+              u32 pos = bit >> 3;   // 位 -> 字节
+							FLIP_BIT(out_buf,bit);
 							stage_finds_times[0] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=0;
 							break;
-
+              }
         // case 1:
 
         //   /* Set byte to interesting value. */
@@ -8120,14 +8192,18 @@ havoc_stage:
         //   out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
         //   stage_finds_times[1] += 1;
         //   break;
-        case 1:
+        case 1:{
 							if (temp_len < 2) break;
 							temp_len_puppet = UR((temp_len << 3) - 1);
 							FLIP_BIT(out_buf, temp_len_puppet);
 							FLIP_BIT(out_buf, temp_len_puppet + 1);
 							stage_finds_times[1] += 1;
+              u32 byte1 = temp_len_puppet >> 3;
+              u32 byte2 = byte1 + 1;
+              if (byte1 < posrev_len_view) position_revise[byte1]=1;
+              if (byte2 < posrev_len_view) position_revise[byte2]=1;
 							break;
-
+        }
         // case 2:
 
         //   /* Set word to interesting value, randomly choosing endian. */
@@ -8147,7 +8223,7 @@ havoc_stage:
         //   }
         //   stage_finds_times[2] += 1;
         //   break;
-        case 2:
+        case 2:{
 							if (temp_len < 2) break;
 							temp_len_puppet = UR((temp_len << 3) - 3);
 							FLIP_BIT(out_buf, temp_len_puppet);
@@ -8155,8 +8231,14 @@ havoc_stage:
 							FLIP_BIT(out_buf, temp_len_puppet + 2);
 							FLIP_BIT(out_buf, temp_len_puppet + 3);
 							stage_finds_times[2] += 1;
+              u32 byte1 = temp_len_puppet >> 3;
+              u32 byte2 = byte1 + 1;
+              u32 byte3 = byte2 + 1;
+              if (byte1 < posrev_len_view) position_revise[byte1]=2;
+              if (byte2 < posrev_len_view) position_revise[byte2]=2;
+              if (byte3 < posrev_len_view) position_revise[byte3]=2;
 							break;
-
+        }
         // case 3:
 
         //   /* Set dword to interesting value, randomly choosing endian. */
@@ -8176,12 +8258,14 @@ havoc_stage:
         //   }
         //   stage_finds_times[3] += 1;
         //   break;
-        case 3:
+        case 3:{ 
 							if (temp_len < 4) break;
-							out_buf[UR(temp_len)] ^= 0xFF;
+              u32 pos=UR(temp_len);
+							out_buf[pos] ^= 0xFF;
 							stage_finds_times[3] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=3;
 							break;
-
+        }
         // case 4:
 
         //   /* Randomly subtract from byte. */
@@ -8189,12 +8273,14 @@ havoc_stage:
         //   out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
         //   stage_finds_times[4] += 1;
         //   break;
-        case 4:
+        case 4:{
 							if (temp_len < 8) break;
-							*(u16*)(out_buf + UR(temp_len - 1)) ^= 0xFFFF;
+              u32 pos=UR(temp_len - 1);
+							*(u16*)(out_buf + pos) ^= 0xFFFF;
 							stage_finds_times[4] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=4;
 							break;
-
+        }
         // case 5:
 
         //   /* Randomly add to byte. */
@@ -8202,12 +8288,14 @@ havoc_stage:
         //   out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
         //   stage_finds_times[5] += 1;
         //   break;
-        case 5:
+        case 5:{
 							if (temp_len < 8) break;
-							*(u32*)(out_buf + UR(temp_len - 3)) ^= 0xFFFFFFFF;
+              u32 pos=UR(temp_len - 3);
+							*(u32*)(out_buf + pos) ^= 0xFFFFFFFF;
 							stage_finds_times[5] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=5;
 							break;
-
+        }
         // case 6:
 
         //   /* Randomly subtract from word, random endian. */
@@ -8231,12 +8319,16 @@ havoc_stage:
         //   }
         //   stage_finds_times[6] += 1;
         //   break;
-        case 6:
-							out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
-							out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
+        case 6:{
+              u32 pos1=UR(temp_len);
+              u32 pos2=UR(temp_len);
+							out_buf[pos1] -= 1 + UR(ARITH_MAX);
+							out_buf[pos2] += 1 + UR(ARITH_MAX);
 							stage_finds_times[6] += 1;
+              if (pos1 < posrev_len_view) position_revise[pos1]=6;
+              if (pos2 < posrev_len_view) position_revise[pos2]=6;
 							break;
-
+        }
         // case 7:
 
         //   /* Randomly add to word, random endian. */
@@ -8260,33 +8352,35 @@ havoc_stage:
         //   }
         //   stage_finds_times[7] += 1;
         //   break;
-        case 7:
+        case 7:{
 							/* Randomly subtract from word, random endian. */
 							if (temp_len < 8) break;
+              u32 pos;
 							if (UR(2)) {
-								u32 pos = UR(temp_len - 1);
+								pos = UR(temp_len - 1);
 								*(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 							}
 							else {
-								u32 pos = UR(temp_len - 1);
+								pos = UR(temp_len - 1);
 								u16 num = 1 + UR(ARITH_MAX);
 								*(u16*)(out_buf + pos) =
 									SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
 							}
 							/* Randomly add to word, random endian. */
 							if (UR(2)) {
-								u32 pos = UR(temp_len - 1);
+								pos = UR(temp_len - 1);
 								*(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 							}
 							else {
-								u32 pos = UR(temp_len - 1);
+								pos = UR(temp_len - 1);
 								u16 num = 1 + UR(ARITH_MAX);
 								*(u16*)(out_buf + pos) =
 									SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 							}
 							stage_finds_times[7] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=7;
 							break;
-
+            }
         // case 8:
 
         //   /* Randomly subtract from dword, random endian. */
@@ -8310,15 +8404,16 @@ havoc_stage:
         //   }
         //   stage_finds_times[8] += 1;
         //   break;
-        case 8:
+        case 8:{
 							/* Randomly subtract from dword, random endian. */
 							if (temp_len < 8) break;
+              u32 pos;
 							if (UR(2)) {
-								u32 pos = UR(temp_len - 3);
+								pos = UR(temp_len - 3);
 								*(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 							}
 							else {
-								u32 pos = UR(temp_len - 3);
+								pos = UR(temp_len - 3);
 								u32 num = 1 + UR(ARITH_MAX);
 								*(u32*)(out_buf + pos) =
 									SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
@@ -8326,18 +8421,19 @@ havoc_stage:
 							/* Randomly add to dword, random endian. */
 							//if (temp_len < 4) break;
 							if (UR(2)) {
-								u32 pos = UR(temp_len - 3);
+								pos = UR(temp_len - 3);
 								*(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 							}
 							else {
-								u32 pos = UR(temp_len - 3);
+								pos = UR(temp_len - 3);
 								u32 num = 1 + UR(ARITH_MAX);
 								*(u32*)(out_buf + pos) =
 									SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 							}
 							stage_finds_times[8] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=8;
 							break;
-
+            }
         // case 9:
 
         //   /* Randomly add to dword, random endian. */
@@ -8361,13 +8457,15 @@ havoc_stage:
         //   }
         //   stage_finds_times[9] += 1;
         //   break;
-        case 9:
+        case 9:{
 							/* Set byte to interesting value. */
 							if (temp_len < 4) break;
-							out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
+              u32 pos=UR(temp_len);
+							out_buf[pos] = interesting_8[UR(sizeof(interesting_8))];
 							stage_finds_times[9] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=9;
 							break;
-
+        }
         // case 10:
 
         //   /* Just set a random byte to a random value. Because,
@@ -8377,20 +8475,22 @@ havoc_stage:
         //   out_buf[UR(temp_len)] ^= 1 + UR(255);
         //   stage_finds_times[10] += 1;
         //   break;
-        case 10:
+        case 10:{
 							/* Set word to interesting value, randomly choosing endian. */
 							if (temp_len < 8) break;
+              u32 pos=UR(temp_len - 1);
 							if (UR(2)) {
-								*(u16*)(out_buf + UR(temp_len - 1)) =
+								*(u16*)(out_buf + pos) =
 									interesting_16[UR(sizeof(interesting_16) >> 1)];
 							}
 							else {
-								*(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
+								*(u16*)(out_buf + pos) = SWAP16(
 									interesting_16[UR(sizeof(interesting_16) >> 1)]);
 							}
 							stage_finds_times[10] += 1;
+              if (pos < posrev_len_view) position_revise[pos]=10;
 							break;
-
+            }
         // case 11 ... 12: {
 
         //     /* Delete bytes. We're making this a bit more likely
@@ -8416,31 +8516,35 @@ havoc_stage:
         //     break;
 
         //   }
-        case 11:
+        case 11:{
 							/* Set dword to interesting value, randomly choosing endian. */
 
 							if (temp_len < 8) break;
 
+              u32 pos=UR(temp_len - 3);
 							if (UR(2)) {
-								*(u32*)(out_buf + UR(temp_len - 3)) =
+								*(u32*)(out_buf + pos) =
 									interesting_32[UR(sizeof(interesting_32) >> 2)];
 							}
 							else {
-								*(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
+								*(u32*)(out_buf + pos) = SWAP32(
 									interesting_32[UR(sizeof(interesting_32) >> 2)]);
 							}
 							 stage_finds_times[11] += 1;
+               if (pos < posrev_len_view) position_revise[pos]=11;
 							break;
-        case 12:
+            }
+        case 12:{
 
 							/* Just set a random byte to a random value. Because,
 							   why not. We use XOR with 1-255 to eliminate the
 							   possibility of a no-op. */
-
-							out_buf[UR(temp_len)] ^= 1 + UR(255);
+              u32 pos=UR(temp_len);
+							out_buf[pos] ^= 1 + UR(255);
 							 stage_finds_times[12] += 1;
+              if (pos < posrev_len_view)  position_revise[pos]=12;
 							break;
-
+        }
         // case 13:
 
         //   if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
@@ -8504,13 +8608,27 @@ havoc_stage:
 
 							del_len = choose_block_len(temp_len - 1);
 
-							del_from = UR(temp_len - del_len + 1);
+							del_from = UR(temp_len - del_len + 1); 
+ 
+              /* 先同步 position_revise 的删除（使用当前逻辑长度视图） */
+              posrev_delete(position_revise, del_from, del_len, &posrev_len_view);
 
 							memmove(out_buf + del_from, out_buf + del_from + del_len,
 								temp_len - del_from - del_len);
 
 							temp_len -= del_len;
+
+              /* 安全检查：两者长度保持一致（可选） */
+              // assert(posrev_len_view == (u32)temp_len);
 							stage_finds_times[13] += 1;
+
+
+               /* 如果你想“标记删除发生在 del_from 位置”，此时 del_from 已经指向删除后的新字节。
+              这只是一个“事件位置”的记录方式，不代表被删除的那段。可选： */
+              // if (del_from < posrev_len_view) position_revise[del_from] = 13;
+              if (del_from > 0 && del_from - 1 < posrev_len_view) position_revise[del_from - 1] = 13;
+
+
 							break;
 
 						}
@@ -8541,7 +8659,7 @@ havoc_stage:
 
         //   }
             case 14:
-
+            {
 							if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
 
 								/* Clone bytes (75%) or insert a block of constant bytes (25%). */
@@ -8565,6 +8683,10 @@ havoc_stage:
 
 								clone_to = UR(temp_len);
 
+                /* -------- position_revise 同步插入 -------- */
+                posrev_insert(&position_revise, &posrev_cap,
+                              clone_to, clone_len, /*tag=*/14, &posrev_len_view);
+
 								new_buf = ck_alloc_nozero(temp_len + clone_len);
 
 								/* Head */
@@ -8587,10 +8709,11 @@ havoc_stage:
 								out_buf = new_buf;
 								temp_len += clone_len;
 								stage_finds_times[14] += 1;
+                // if (clone_to < posrev_len_view) position_revise[clone_to] = 14; 
 							}
 
 							break;
-
+            }
         /* Values 15 and 16 can be selected only if there are any extras
            present in the dictionaries. */
 
@@ -8653,6 +8776,10 @@ havoc_stage:
 							else memset(out_buf + copy_to,
 								UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
 							 stage_finds_times[15] += 1;
+              //  u32 end = insert_at + extra_len;
+              // if (end > posrev_len_view) end = posrev_len_view;
+               for (u32 k = 0; k < copy_len; ++k) position_revise[copy_to + k] = 15;
+              //  position_revise[copy_to]=15;
 							break;
 
 						}
@@ -8712,7 +8839,6 @@ havoc_stage:
         case 16: {
 
                   /* Overwrite bytes with an extra. */
-
                   if (!extras_cnt || (a_extras_cnt && UR(2))) {
 
                   /* No user-specified extras or odds in our favor. Let's use an
@@ -8726,6 +8852,7 @@ havoc_stage:
 
                   insert_at = UR(temp_len - extra_len + 1);
                   memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
+                  for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
 
                   } else {
 
@@ -8739,9 +8866,14 @@ havoc_stage:
 
                   insert_at = UR(temp_len - extra_len + 1);
                   memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
+                  // u32 end = insert_at + extra_len;
+                  // if (end > posrev_len_view) end = posrev_len_view;
+                  for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
 
                   }
                   stage_finds_times[16] += 1;
+                  
+                  // position_revise[pos]=16;
                   break;
 
             }
@@ -8760,6 +8892,8 @@ havoc_stage:
                   extra_len = a_extras[use_extra].len;
 
                   if (temp_len + extra_len >= MAX_FILE) break;
+                  posrev_insert(&position_revise, &posrev_cap,
+                    insert_at, extra_len, /*tag=*/17, &posrev_len_view);
 
                   new_buf = ck_alloc_nozero(temp_len + extra_len);
 
@@ -8775,6 +8909,10 @@ havoc_stage:
                   extra_len = extras[use_extra].len;
 
                   if (temp_len + extra_len >= MAX_FILE) break;
+
+                   /* -------- position_revise 同步插入 -------- */
+                  posrev_insert(&position_revise, &posrev_cap,
+                    insert_at, extra_len, /*tag=*/17, &posrev_len_view);
 
                   new_buf = ck_alloc_nozero(temp_len + extra_len);
 
@@ -8794,6 +8932,7 @@ havoc_stage:
                   out_buf   = new_buf;
                   temp_len += extra_len;
                   stage_finds_times[17] += 1;
+                  // if (insert_at < posrev_len_view) position_revise[insert_at] = 17;
                   break;
 
             }
@@ -8877,6 +9016,7 @@ havoc_stage:
             }
             else{//<0
               fprintf(fp,"\nprox_score_after-prox_score_before<0\n");
+
             }     
        }
        fprintf(fp,"\n stage_finds_score:\n");
@@ -8903,8 +9043,13 @@ havoc_stage:
        for (int i=0;i<operator_num;i++){
         	fprintf(fp,"%lf ",stage_finds_score_all[i]);
        }
+       fprintf(fp,"\n position_revise:\n");
+       for (int i=0;i<posrev_len_view;i++){
+          if(i%16==0) fprintf(fp,"\n ");
+        	fprintf(fp,"%d ",position_revise[i]);
+       }
       
-  }
+    }
 
   new_hit_cnt = queued_paths + unique_crashes;
   
@@ -9009,6 +9154,7 @@ retry_splicing:
     in_buf = new_buf;
 
     ck_free(out_buf);
+    ck_free(position_revise);
     out_buf = ck_alloc_nozero(len);
     memcpy(out_buf, in_buf, len);
 
