@@ -71,6 +71,7 @@
 
 #include <stddef.h> /* NULL */
 #include "cmaes_interface.h"
+#include <assert.h>
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -125,6 +126,9 @@ static double  stage_finds_times[operator_num],//每个算子变异前执行次�
 
 
 FILE *fp;
+// FILE *fp1;
+// u64 max_position_revise_ever_case = 0;//记录每个case的最长数组位置
+
 time_t timer;
 
 EXP_ST u8 *in_dir,                    /* Input directory with test cases  */
@@ -6935,13 +6939,21 @@ static inline void posrev_init_round(s32 **arr, s32 *cap, u32 cur_len) {
 static inline void posrev_insert(s32 **arr, s32 *cap,
                                  u32 at, u32 n, s32 tag, u32 *len_io) {
   if (n == 0) return;
+
+  /* 最小修改：增加边界断言，防止非法插入点 */
+  assert(at <= *len_io);
+
   posrev_ensure_cap(arr, cap, *len_io + n);
 
-  memmove((*arr) + at + n, (*arr) + at,
-          (size_t)(*len_io - at) * sizeof(**arr));
+  /* 计算需要移动的元素数量，避免无符号下溢导致超大值 */
+  size_t move_count = (*len_io > at) ? (size_t)(*len_io - at) : 0;
+  if (move_count)
+    memmove((*arr) + at + n, (*arr) + at, move_count * sizeof(**arr));
 
+  /* 把新插入的 n 个槽设为 tag */
   for (u32 k = 0; k < n; ++k) (*arr)[at + k] = tag;
 
+  /* 更新逻辑长度 */
   *len_io += n;
 }
 
@@ -6950,15 +6962,19 @@ static inline void posrev_insert(s32 **arr, s32 *cap,
 static inline void posrev_delete(s32 *arr, u32 at, u32 n, u32 *len_io) {
   if (n == 0) return;
 
-  memmove(arr + at, arr + at + n,
-          (size_t)(*len_io - at - n) * sizeof(*arr));
+  /* 最小修改：增加边界断言，防止越界删除 */
+  assert(at + n <= *len_io);
+
+  /* 计算要移动的元素数量（右半段），避免无符号下溢 */
+  size_t move_count = (*len_io > at + n) ? (size_t)(*len_io - at - n) : 0;
+  if (move_count)
+    memmove(arr + at, arr + at + n, move_count * sizeof(*arr));
 
   /* 将尾部被“缩短”的区域置为 -1（可选，但便于调试） */
   for (u32 i = (*len_io - n); i < *len_io; ++i) arr[i] = -1;
 
   *len_io -= n;
 }
-
 
 static u8 cma_fuzz_one(char** argv) {
 
@@ -6968,6 +6984,9 @@ static u8 cma_fuzz_one(char** argv) {
   u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
 
   fprintf(fp,"\n-----------next case----------\n");//表明换了case，下面的位置在同一个case上才有参考价值
+  // fprintf(fp1,"newcase\n");//表明换了case，下面的位置在同一个case上才有参考价值
+  // fprintf(fp1,"max_length:%lld\n",max_position_revise_ever_case);//记录当前case的最大长度
+  // max_position_revise_ever_case=0;//将每个case下的最大数组长度清零
 
  struct queue_entry* target; // Target test case to splice with.
 
@@ -8151,7 +8170,7 @@ havoc_stage:
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) { //每循环一轮这个，更新算子增加分数
     
     posrev_len_view = (u32)temp_len;               /* 让视图与当前 temp_len 对齐 */
-    posrev_init_round(&position_revise, &posrev_cap, posrev_len_view);
+    posrev_init_round(&position_revise, &posrev_cap, posrev_len_view);//这个就会重置position_revise为-1 代码逻辑是对的
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
@@ -8945,7 +8964,6 @@ havoc_stage:
 
     //记录关心指标增加了多少
     u64 temp_total_found = queued_paths + unique_crashes;
-    u64 prox_score_before = compute_proximity_score();
 
     if (common_fuzz_stuff(argv, out_buf, temp_len))
       goto abandon_entry;
@@ -8961,7 +8979,7 @@ havoc_stage:
 
     //记录关心指标复原后的分数
     u64 prox_score_after = compute_proximity_score();
-    fprintf(fp,"\n prox_score_before prox_score_after %lld,%lld:\n",prox_score_before,prox_score_after);
+    fprintf(fp,"\n prox_score_before prox_score_after %lld,%lld:\n",prox_score_before_before,prox_score_after);
     
     /* If we're finding new stuff, let's run for a bit longer, limits
        permitting. */
@@ -8988,14 +9006,15 @@ havoc_stage:
     if (unlikely(queued_paths + unique_crashes > temp_total_found))
       {  
             fprintf(fp,"\nqueued_paths + unique_crashes > temp_total_found\n");
-            if((prox_score_after>prox_score_before) ){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
+            if((prox_score_after>prox_score_before_before) ){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
               // u64 temp_temp_puppet = queued_paths + unique_crashes - temp_total_found;
               fprintf(fp,"\nprox_score_after-prox_score_before>0\n");
+              // fprintf(fp1,"prox_score_after-prox_score_before>0\n");
                time(&timer);
                long seconds = (long)timer;
               fprintf(fp,"%ld\n",seconds);
              
-              u64 new_add_score = prox_score_after-prox_score_before;
+              u64 new_add_score = prox_score_after-prox_score_before_before;
               // fprintf(fp,"\nnew_add_score %lld\n",new_add_score);
               // total_puppet_find = total_puppet_find + temp_temp_puppet;
               for (i = 0; i < operator_num; i++)
@@ -9016,7 +9035,7 @@ havoc_stage:
             }
             else{//<0
               fprintf(fp,"\nprox_score_after-prox_score_before<0\n");
-
+              // fprintf(fp1,"prox_score_after-prox_score_before<0\n");
             }     
        }
        fprintf(fp,"\n stage_finds_score:\n");
@@ -9048,9 +9067,14 @@ havoc_stage:
           if(i%16==0) fprintf(fp,"\n ");
         	fprintf(fp,"%d ",position_revise[i]);
        }
-      
-    }
+       
+      //  fprintf(fp1,"%d",posrev_len_view);//记录当前变异后文件长度
+      //  if (posrev_len_view>max_position_revise_ever_case){
+      //     max_position_revise_ever_case=posrev_len_view;//更换最大的长度
+      //   }
 
+      }
+  //这里是for循环结束 也就是一轮变异结束
   new_hit_cnt = queued_paths + unique_crashes;
   
   time(&timer);
@@ -10762,6 +10786,13 @@ int main(int argc, char** argv) {
       SAYF("Failed to open cmaes-init.log\n");
       exit(1);
     }
+
+    // fp1 = fopen("/cma-log/record_for_ana.txt", "w");
+    // if (fp1 == NULL)
+    // {
+    //   SAYF("Failed to open record_for_ana.txt\n");
+    //   exit(1);
+    // }
     
     fprintf(fp,"init operator_prob: ");
     double total_operator_prob=0.0;

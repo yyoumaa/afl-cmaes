@@ -2518,3 +2518,73 @@
  maxTimeFractionForEigendecompostion 0.2
  resume                                                        _no_
 
+
+# Read from  at Fri Nov  7 01:25:47 2025
+
+ N 18
+ initialX 18
+ 0.0556  0.0556  0.0556  0.0556  0.0556
+ 0.0556  0.0556  0.0556  0.0556  0.0556
+ 0.0556  0.0556  0.0556  0.0556  0.0556
+ 0.0556  0.0556  0.0556 
+ initialStandardDeviations 18
+   0.01    0.01    0.01    0.01    0.01
+   0.01    0.01    0.01    0.01    0.01
+   0.01    0.01    0.01    0.01    0.01
+   0.01    0.01    0.01 
+ seed 154233321
+ stopMaxFunEvals 396900
+ stopMaxIter 33075
+ stopFitness
+ stopTolFun 1e-12
+ stopTolFunHist 1e-13
+ stopTolX 0
+ stopTolUpXFactor 1000
+ lambda 12
+ mu 6
+ weights   log
+ cs 0.239418
+ damps 1.23887
+ ccumcov 0.181818
+ mucov 3.98087
+ ccov 0.0142369
+ diagonalCovarianceMatrix 0
+ updatecov 0.390223
+ maxTimeFractionForEigendecompostion 0.2
+ resume                                                        _no_
+
+
+# Read from  at Fri Nov  7 01:57:09 2025
+
+ N 18
+ initialX 18
+ 0.0556  0.0556  0.0556  0.0556  0.0556
+ 0.0556  0.0556  0.0556  0.0556  0.0556
+ 0.0556  0.0556  0.0556  0.0556  0.0556
+ 0.0556  0.0556  0.0556 
+ initialStandardDeviations 18
+   0.01    0.01    0.01    0.01    0.01
+   0.01    0.01    0.01    0.01    0.01
+   0.01    0.01    0.01    0.01    0.01
+   0.01    0.01    0.01 
+ seed 154457724
+ stopMaxFunEvals 396900
+ stopMaxIter 33075
+ stopFitness
+ stopTolFun 1e-12
+ stopTolFunHist 1e-13
+ stopTolX 0
+ stopTolUpXFactor 1000
+ lambda 12
+ mu 6
+ weights   log
+ cs 0.239418
+ damps 1.23887
+ ccumcov 0.181818
+ mucov 3.98087
+ ccov 0.0142369
+ diagonalCovarianceMatrix 0
+ updatecov 0.390223
+ maxTimeFractionForEigendecompostion 0.2
+ resume                                                        _no_
+
