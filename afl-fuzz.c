@@ -126,8 +126,8 @@ static double  stage_finds_times[operator_num],//每个算子变异前执行次�
 
 
 FILE *fp;
-// FILE *fp1;
-// u64 max_position_revise_ever_case = 0;//记录每个case的最长数组位置
+FILE *fp1;
+u64 max_position_revise_ever_case = 0;//记录每个case的最长数组位置
 
 time_t timer;
 
@@ -6976,6 +6976,25 @@ static inline void posrev_delete(s32 *arr, u32 at, u32 n, u32 *len_io) {
   *len_io -= n;
 }
 
+void ensure_capacity_u64(u64 **arr, u64 *cap, u64 new_len) {
+    if (new_len <= *cap) return;  // 容量够，不扩
+    u64 new_cap = (*cap == 0) ? 64 : *cap;
+
+    while (new_cap < new_len)
+        new_cap *= 2;  // 每次容量翻倍，避免频繁 realloc
+
+    *arr = realloc(*arr, new_cap * sizeof(**arr));
+    if (!*arr) {
+        fprintf(stderr, "Memory realloc failed!\n");
+        exit(1);
+    }
+
+    // 将新分配的部分初始化为 0（可选）
+    memset(*arr + *cap, 0, (new_cap - *cap) * sizeof(**arr));
+
+    *cap = new_cap;
+}
+
 static u8 cma_fuzz_one(char** argv) {
 
   s32 len, fd, temp_len, i, j;
@@ -6984,9 +7003,12 @@ static u8 cma_fuzz_one(char** argv) {
   u32 splice_cycle = 0, perf_score = 100, orig_perf, prev_cksum, eff_cnt = 1;
 
   fprintf(fp,"\n-----------next case----------\n");//表明换了case，下面的位置在同一个case上才有参考价值
-  // fprintf(fp1,"newcase\n");//表明换了case，下面的位置在同一个case上才有参考价值
-  // fprintf(fp1,"max_length:%lld\n",max_position_revise_ever_case);//记录当前case的最大长度
-  // max_position_revise_ever_case=0;//将每个case下的最大数组长度清零
+  fprintf(fp1,"newcase\n");//表明换了case，下面的位置在同一个case上才有参考价值
+  max_position_revise_ever_case=0;//将每个case下的最大数组长度清零
+  u64 operator_usage_count_for_add[10000][18]={0};//记录最长种子字节长度下，分数>0分类下每个字节位置被修改的次数
+  u64 operator_usage_count_for_sub[10000][18]={0};//记录最长种子字节长度下，分数<0分类下每个字节位置被修改的次数
+  u64 operator_usage_scores_for_add[10000][18]={0};//记录最长种子字节长度下，分数>0分类下每个字节位置平均分数
+  u64 operator_usage_scores_for_sub[10000][18]={0};//记录最长种子字节长度下，分数<0分类下每个字节位置平均分数
 
  struct queue_entry* target; // Target test case to splice with.
 
@@ -9002,6 +9024,14 @@ havoc_stage:
           stage_finds_per_score[i]=0.0; //每轮算子平均分数清零
       }
 
+      fprintf(fp1,"%d\n",posrev_len_view);//记录当前变异后文件长度
+      if (posrev_len_view>max_position_revise_ever_case){
+      max_position_revise_ever_case=posrev_len_view;//更换最大的长度  
+      }
+      if (max_position_revise_ever_case>10000) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
+      FATAL("max_position_revise_ever_case>10000! ");
+      }
+
     //更新变异算子概率分布
     if (unlikely(queued_paths + unique_crashes > temp_total_found))
       {  
@@ -9009,7 +9039,6 @@ havoc_stage:
             if((prox_score_after>prox_score_before_before) ){  //在有新路径发现的基础上，如果新产生的例子分数高，那么更新
               // u64 temp_temp_puppet = queued_paths + unique_crashes - temp_total_found;
               fprintf(fp,"\nprox_score_after-prox_score_before>0\n");
-              // fprintf(fp1,"prox_score_after-prox_score_before>0\n");
                time(&timer);
                long seconds = (long)timer;
               fprintf(fp,"%ld\n",seconds);
@@ -9032,10 +9061,37 @@ havoc_stage:
                    
                 }
               }
+
+              //累积所有>0的变异轮次中，各个位置的算子使用次数
+              for (int i=0;i<posrev_len_view;i++){
+                  if(position_revise[i]!=-1){//说明这个位置被变异过
+                      operator_usage_count_for_add[i][position_revise[i]]+=1;
+                  }
+              }
+
+              //累积所有>0的变异轮次中，各个位置的算子平均分数
+              for (int i=0;i<posrev_len_view;i++){
+                  if(position_revise[i]!=-1){//说明这个位置被变异过
+                      operator_usage_scores_for_add[i][position_revise[i]]+=stage_finds_per_score[position_revise[i]];
+                  }
+              }
+              
             }
             else{//<0
               fprintf(fp,"\nprox_score_after-prox_score_before<0\n");
-              // fprintf(fp1,"prox_score_after-prox_score_before<0\n");
+              //累积所有<0的变异轮次中，各个位置的算子使用次数
+              for (int i=0;i<posrev_len_view;i++){
+                  if(position_revise[i]!=-1){//说明这个位置被变异过
+                      operator_usage_count_for_sub[i][position_revise[i]]+=1;
+                  }
+              }
+              //累积所有<0的变异轮次中，各个位置的算子平均分数
+              for (int i=0;i<posrev_len_view;i++){
+                  if(position_revise[i]!=-1){//说明这个位置被变异过
+                      operator_usage_scores_for_sub[i][position_revise[i]]+=stage_finds_per_score[position_revise[i]];
+                  }
+              }
+              
             }     
        }
        fprintf(fp,"\n stage_finds_score:\n");
@@ -9066,13 +9122,46 @@ havoc_stage:
        for (int i=0;i<posrev_len_view;i++){
           if(i%16==0) fprintf(fp,"\n ");
         	fprintf(fp,"%d ",position_revise[i]);
-       }
-       
-      //  fprintf(fp1,"%d",posrev_len_view);//记录当前变异后文件长度
-      //  if (posrev_len_view>max_position_revise_ever_case){
-      //     max_position_revise_ever_case=posrev_len_view;//更换最大的长度
-      //   }
+       }      
+        //这个打印得做一些优化，不然太大了
+        //1. 如果一个位置某个算子从来没用过，就不打印
+        //2. 
+        fprintf(fp1,"------------------------------------------\n");
+        fprintf(fp1,">0\n");
+        fprintf(fp1,"\npos: 0\n");
+        for (int i=0;i<max_position_revise_ever_case;i++){
+            int flag_for_print=0;
+            for(int j=0;j<operator_num;j++){
+              if(operator_usage_count_for_add[i][j]==0 && operator_usage_scores_for_add[i][j]==0){
+                  continue;
+              }
+              fprintf(fp1,"%d,%lld,%lld\t",j,operator_usage_count_for_add[i][j],operator_usage_scores_for_add[i][j]);
+              flag_for_print=1;
+            } 	
+            if (flag_for_print==1 && i<max_position_revise_ever_case){
+              fprintf(fp1,"\npos: %d",i+1);//这样可以不打印所有的算子都为0时候的pos那一行
+              fprintf(fp1,"\n");
+            }
+            
+        }
 
+        fprintf(fp1,"\n------------------------------------------\n");
+          fprintf(fp1,"<0\n");
+          fprintf(fp1,"\npos: 0\n");
+          for (int i=0;i<max_position_revise_ever_case;i++){
+              int flag_for_print=0;
+              for(int j=0;j<operator_num;j++){
+                if(operator_usage_count_for_sub[i][j]==0 && operator_usage_scores_for_sub[i][j]==0){
+                  continue;
+                }
+                fprintf(fp1,"%d,%lld,%lld\t",j,operator_usage_count_for_sub[i][j],operator_usage_scores_for_sub[i][j]);
+                flag_for_print=1;
+              } 	
+              if (flag_for_print==1 && i<max_position_revise_ever_case){
+                fprintf(fp1,"\npos: %d",i+1);//这样可以不打印所有的算子都为0时候的pos那一行
+                fprintf(fp1,"\n");
+              }
+          }
       }
   //这里是for循环结束 也就是一轮变异结束
   new_hit_cnt = queued_paths + unique_crashes;
@@ -10787,12 +10876,12 @@ int main(int argc, char** argv) {
       exit(1);
     }
 
-    // fp1 = fopen("/cma-log/record_for_ana.txt", "w");
-    // if (fp1 == NULL)
-    // {
-    //   SAYF("Failed to open record_for_ana.txt\n");
-    //   exit(1);
-    // }
+    fp1 = fopen("/cma-log/record_for_ana.txt", "w");
+    if (fp1 == NULL)
+    {
+      SAYF("Failed to open record_for_ana.txt\n");
+      exit(1);
+    }
     
     fprintf(fp,"init operator_prob: ");
     double total_operator_prob=0.0;
