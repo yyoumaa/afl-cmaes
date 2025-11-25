@@ -73,6 +73,20 @@
 #include "cmaes_interface.h"
 #include <assert.h>
 
+FILE *mutate_fp = NULL;
+
+typedef struct {
+    u32 method;//变异的case方法
+    u32 sites;//在什么位置
+    u32 del_num;//如果有增删，便记录改动的位数
+    u32 inmeth;//单个case里的方法细分
+} Mutate_arr; // 定义结构体
+
+Mutate_arr mutate_arr[256] = {0};
+
+u32 mutate_count = 0;
+
+
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
@@ -938,6 +952,14 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det, u64 prox_score) {
 
   last_path_time = get_cur_time();
 
+    u32 i = 0;
+  
+  fprintf(mutate_fp, "\n%s\n", q->fname);
+  for (i = 0; i < mutate_count; i++) {
+    fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+  }
+  mutate_count = 0;
+  memset(mutate_arr, 0, sizeof(mutate_arr));
 }
 
 /* Sort the queue based on the proximity score. Needed after the dry-run. */
@@ -3474,6 +3496,15 @@ keep_as_crash:
       fn = alloc_printf("%s/crashes/id:%06llu,%llu,sig:%02u,%s", out_dir,
                         unique_crashes, prox_score, kill_signal,
                         describe_op(0));
+      u32 i = 0;
+  
+      fprintf(mutate_fp, "\n%s\n", fn);
+      for (i = 0; i < mutate_count; i++) {
+        fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+      }
+      mutate_count = 0;
+      memset(mutate_arr, 0, sizeof(mutate_arr));
+
 
 #else
 
@@ -8203,13 +8234,17 @@ havoc_stage:
       stage_finds_times_origin[i] = stage_finds_times[i];
     }
 
-    for (i = 0; i < use_stacking; i++) {
+    mutate_count = use_stacking;//记录单次变异个数 
 
+    for (i = 0; i < use_stacking; i++) {
+      //这里注释哪行选择启用不启用cma-es算法选择算子
+       mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+      switch (mutate_arr[i].method) {
       // switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
-      int opt_case=select_algorithm( extras_cnt + a_extras_cnt );
+      // int opt_case=select_algorithm( extras_cnt + a_extras_cnt );
       // fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
       // fprintf(fp,"%d %d\n",i,opt_case);
-      switch (opt_case) {
+      // switch (opt_case) {
         // case 0:
 
         //   /* Flip a single bit somewhere. Spooky! */
@@ -8219,8 +8254,13 @@ havoc_stage:
         //   break;
         case 0:{
 							/* Flip a single bit somewhere. Spooky! */
+              // u32 bit = UR(temp_len << 3);
+              // u32 pos = bit >> 3;   // 位 -> 字节
+							// FLIP_BIT(out_buf,bit);
+
               u32 bit = UR(temp_len << 3);
               u32 pos = bit >> 3;   // 位 -> 字节
+              mutate_arr[i].sites =pos;
 							FLIP_BIT(out_buf,bit);
 							stage_finds_times[0] += 1;
               if (pos < posrev_len_view) position_revise[pos]=0;
@@ -8238,6 +8278,7 @@ havoc_stage:
 							temp_len_puppet = UR((temp_len << 3) - 1);
 							FLIP_BIT(out_buf, temp_len_puppet);
 							FLIP_BIT(out_buf, temp_len_puppet + 1);
+              mutate_arr[i].sites =temp_len_puppet;
 							stage_finds_times[1] += 1;
               u32 byte1 = temp_len_puppet >> 3;
               u32 byte2 = byte1 + 1;
@@ -8271,6 +8312,7 @@ havoc_stage:
 							FLIP_BIT(out_buf, temp_len_puppet + 1);
 							FLIP_BIT(out_buf, temp_len_puppet + 2);
 							FLIP_BIT(out_buf, temp_len_puppet + 3);
+              mutate_arr[i].sites =temp_len_puppet;
 							stage_finds_times[2] += 1;
               u32 byte1 = temp_len_puppet >> 3;
               u32 byte2 = byte1 + 1;
@@ -8302,6 +8344,7 @@ havoc_stage:
         case 3:{ 
 							if (temp_len < 4) break;
               u32 pos=UR(temp_len);
+              mutate_arr[i].sites =pos;
 							out_buf[pos] ^= 0xFF;
 							stage_finds_times[3] += 1;
               if (pos < posrev_len_view) position_revise[pos]=3;
@@ -8317,6 +8360,7 @@ havoc_stage:
         case 4:{
 							if (temp_len < 8) break;
               u32 pos=UR(temp_len - 1);
+              mutate_arr[i].sites =pos;
 							*(u16*)(out_buf + pos) ^= 0xFFFF;
 							stage_finds_times[4] += 1;
               if (pos < posrev_len_view) position_revise[pos]=4;
@@ -8332,6 +8376,7 @@ havoc_stage:
         case 5:{
 							if (temp_len < 8) break;
               u32 pos=UR(temp_len - 3);
+              mutate_arr[i].sites =pos;
 							*(u32*)(out_buf + pos) ^= 0xFFFFFFFF;
 							stage_finds_times[5] += 1;
               if (pos < posrev_len_view) position_revise[pos]=5;
@@ -8363,6 +8408,7 @@ havoc_stage:
         case 6:{
               u32 pos1=UR(temp_len);
               u32 pos2=UR(temp_len);
+              mutate_arr[i].sites =pos1;
 							out_buf[pos1] -= 1 + UR(ARITH_MAX);
 							out_buf[pos2] += 1 + UR(ARITH_MAX);
 							stage_finds_times[6] += 1;
@@ -8419,6 +8465,8 @@ havoc_stage:
 									SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 							}
 							stage_finds_times[7] += 1;
+              mutate_arr[i].sites =pos;
+              
               if (pos < posrev_len_view) position_revise[pos]=7;
 							break;
             }
@@ -8472,6 +8520,7 @@ havoc_stage:
 									SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 							}
 							stage_finds_times[8] += 1;
+              mutate_arr[i].sites =pos;
               if (pos < posrev_len_view) position_revise[pos]=8;
 							break;
             }
@@ -8504,6 +8553,7 @@ havoc_stage:
               u32 pos=UR(temp_len);
 							out_buf[pos] = interesting_8[UR(sizeof(interesting_8))];
 							stage_finds_times[9] += 1;
+              mutate_arr[i].sites =pos;
               if (pos < posrev_len_view) position_revise[pos]=9;
 							break;
         }
@@ -8529,6 +8579,7 @@ havoc_stage:
 									interesting_16[UR(sizeof(interesting_16) >> 1)]);
 							}
 							stage_finds_times[10] += 1;
+              mutate_arr[i].sites =pos;
               if (pos < posrev_len_view) position_revise[pos]=10;
 							break;
             }
@@ -8572,6 +8623,7 @@ havoc_stage:
 									interesting_32[UR(sizeof(interesting_32) >> 2)]);
 							}
 							 stage_finds_times[11] += 1;
+               mutate_arr[i].sites =pos;
                if (pos < posrev_len_view) position_revise[pos]=11;
 							break;
             }
@@ -8583,6 +8635,7 @@ havoc_stage:
               u32 pos=UR(temp_len);
 							out_buf[pos] ^= 1 + UR(255);
 							 stage_finds_times[12] += 1;
+               mutate_arr[i].sites =pos;
               if (pos < posrev_len_view)  position_revise[pos]=12;
 							break;
         }
@@ -8668,7 +8721,8 @@ havoc_stage:
               这只是一个“事件位置”的记录方式，不代表被删除的那段。可选： */
               // if (del_from < posrev_len_view) position_revise[del_from] = 13;
               if (del_from > 0 && del_from - 1 < posrev_len_view) position_revise[del_from - 1] = 13;
-
+                mutate_arr[i].sites =del_from - 1;
+                mutate_arr[i].del_num = del_len;
 
 							break;
 
@@ -8750,6 +8804,8 @@ havoc_stage:
 								out_buf = new_buf;
 								temp_len += clone_len;
 								stage_finds_times[14] += 1;
+                mutate_arr[i].sites =clone_to;
+                mutate_arr[i].del_num = clone_len;
                 // if (clone_to < posrev_len_view) position_revise[clone_to] = 14; 
 							}
 
@@ -8820,6 +8876,8 @@ havoc_stage:
               //  u32 end = insert_at + extra_len;
               // if (end > posrev_len_view) end = posrev_len_view;
                for (u32 k = 0; k < copy_len; ++k) position_revise[copy_to + k] = 15;
+               mutate_arr[i].sites =copy_to;
+               mutate_arr[i].del_num = copy_len;
               //  position_revise[copy_to]=15;
 							break;
 
@@ -8894,7 +8952,7 @@ havoc_stage:
                   insert_at = UR(temp_len - extra_len + 1);
                   memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
                   for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
-
+                    mutate_arr[i].sites =insert_at;
                   } else {
 
                   /* No auto extras or odds in our favor. Use the dictionary. */
@@ -8910,7 +8968,7 @@ havoc_stage:
                   // u32 end = insert_at + extra_len;
                   // if (end > posrev_len_view) end = posrev_len_view;
                   for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
-
+                    mutate_arr[i].sites =insert_at;
                   }
                   stage_finds_times[16] += 1;
                   
@@ -8973,6 +9031,8 @@ havoc_stage:
                   out_buf   = new_buf;
                   temp_len += extra_len;
                   stage_finds_times[17] += 1;
+                  mutate_arr[i].sites =insert_at;
+                  mutate_arr[i].del_num = extra_len;
                   // if (insert_at < posrev_len_view) position_revise[insert_at] = 17;
                   break;
 
@@ -10640,6 +10700,8 @@ int main(int argc, char** argv) {
 
   struct timeval tv;
   struct timezone tz;
+  mutate_fp = fopen("./mutate_out.txt","w");
+  memset(mutate_arr, 0, sizeof(mutate_arr));
 
   SAYF(cCYA "afl-fuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
@@ -11189,6 +11251,7 @@ stop_fuzzing:
 
   OKF("We're done here. Have a nice day!\n");
   fclose(fp);
+  fclose(mutate_fp);
   cmaes_exit(&evo);
   exit(0);
 
