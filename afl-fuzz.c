@@ -80,6 +80,7 @@ typedef struct {
     u32 sites;//在什么位置
     u32 del_num;//如果有增删，便记录改动的位数
     u32 inmeth;//单个case里的方法细分
+    u32 split_at;//是否拼接，如果不是0那么就是拼接位置
 } Mutate_arr; // 定义结构体
 
 Mutate_arr mutate_arr[256] = {0};
@@ -956,8 +957,14 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det, u64 prox_score) {
   
   fprintf(mutate_fp, "\n%s\n", q->fname);
   for (i = 0; i < mutate_count; i++) {
-    fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+    if(i==0){
+      fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d  Split_at: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num, mutate_arr[i].split_at);
+
+    }else{
+      fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+    }
   }
+  
   mutate_count = 0;
   memset(mutate_arr, 0, sizeof(mutate_arr));
 }
@@ -3500,7 +3507,11 @@ keep_as_crash:
   
       fprintf(mutate_fp, "\n%s\n", fn);
       for (i = 0; i < mutate_count; i++) {
-        fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+        if(i==0){
+          fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d  Split_at: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num, mutate_arr[i].split_at);
+        }else{
+          fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+        }
       }
       mutate_count = 0;
       memset(mutate_arr, 0, sizeof(mutate_arr));
@@ -9319,6 +9330,7 @@ retry_splicing:
     /* Split somewhere between the first and last differing byte. */
 
     split_at = f_diff + UR(l_diff - f_diff);
+    mutate_arr[0].split_at=split_at;//如果用了拼接，把这个数组的第一行的split_at记录为拼接位置
 
     /* Do the thing. */
 
