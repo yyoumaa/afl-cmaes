@@ -146,6 +146,11 @@ u64 max_position_revise_ever_case = 0;//记录每个case的最长数组位置
 
 time_t timer;
 
+FILE *fp_output;
+u32 output_dim[10]={1,2,3,4,5,6,7,8};
+#define OUTPUT_DIM_SIZE (sizeof(output_dim) / sizeof(output_dim[0]))
+#define OPREV_CAP 10000
+
 EXP_ST u8 *in_dir,                    /* Input directory with test cases  */
           *out_file,                  /* File to fuzz, if any             */
           *out_dir,                   /* Working & output directory       */
@@ -1217,6 +1222,57 @@ static u32 count_non_255_bytes(u8* mem) {
 
   return ret;
 
+}
+
+static u32* get_output_vector(void)
+{
+    static u32 output_vector[OUTPUT_DIM_SIZE] = {0};
+
+    // 初始化为 0（可省略，因为 static 会自动置 0）
+    for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
+        output_vector[i] = 0;
+    }
+
+    // 遍历 dfg_bits
+    for (u32 i = 0; i < DFG_MAP_SIZE; i++) {
+        u32 v = dfg_bits[i];
+
+        // 检查是否与 output_dim 中任一项匹配
+        for (u32 j = 0; j < OUTPUT_DIM_SIZE; j++) {
+            if (v == output_dim[j]) {
+                output_vector[j] = 1;
+            }
+        }
+    }
+
+    return output_vector;
+}
+
+static double* get_output_vector_log(void)
+{
+    static double output_vector_time[OUTPUT_DIM_SIZE] = {0};
+
+    // 初始化为 0（可省略，因为 static 会自动置 0）
+    for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
+        output_vector_time[i] = 0;
+    }
+
+    // 遍历 dfg_bits
+    for (u32 i = 0; i < DFG_MAP_SIZE; i++) {
+        u32 v = dfg_bits[i];
+
+        // 检查是否与 output_dim 中任一项匹配
+        for (u32 j = 0; j < OUTPUT_DIM_SIZE; j++) {
+            if (v == output_dim[j]) {
+                output_vector_time[j] += 1;
+            }
+        }
+    }
+     for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
+        output_vector_time[i] = log(output_vector_time[i]);
+    }
+
+    return output_vector_time;
 }
 
 static u64 compute_proximity_score(void) {
@@ -7046,6 +7102,7 @@ static u8 cma_fuzz_one(char** argv) {
 
   fprintf(fp,"\n-----------next case----------\n");//表明换了case，下面的位置在同一个case上才有参考价值
   fprintf(fp1,"newcase\n");//表明换了case，下面的位置在同一个case上才有参考价值
+  fprintf(fp_output,"newcase\n");//表明换了case，下面的位置在同一个case上才有参考价值
   max_position_revise_ever_case=0;//将每个case下的最大数组长度清零
   u64 operator_usage_count_for_add[10000][18]={0};//记录最长种子字节长度下，分数>0分类下每个字节位置被修改的次数
   u64 operator_usage_count_for_sub[10000][18]={0};//记录最长种子字节长度下，分数<0分类下每个字节位置被修改的次数
@@ -8218,6 +8275,19 @@ havoc_stage:
    u64 prox_score_before_before = compute_proximity_score();
    fprintf(fp,"\nu64 prox_score_before_before = %lld\n", prox_score_before_before);
 
+   /* 注意：get_output_vector 返回的是指向静态缓冲区的指针，
+      后续再次调用会覆盖之前的内容。这里改为拷贝一份，避免别名问题。 */
+      //排查了半天 还得是ai
+  //  u32 output_vector_before[OUTPUT_DIM_SIZE];
+  //  memcpy(output_vector_before, get_output_vector(), sizeof(output_vector_before));
+  double output_vector_before[OUTPUT_DIM_SIZE];
+   memcpy(output_vector_before, get_output_vector_log(), sizeof(output_vector_before));
+   fprintf(fp_output,"output_vector_before ");
+   for(int i=0;i<OUTPUT_DIM_SIZE;i++){
+     fprintf(fp_output,"%.2f ",output_vector_before[i]);
+   }
+   fprintf(fp_output,"\n");
+
   s32 temp_len_puppet;
   // s32 len_for_pos=len;
   // s32 position_revise[len_for_pos];//初始化位置更改数组
@@ -8235,6 +8305,12 @@ havoc_stage:
     
     posrev_len_view = (u32)temp_len;               /* 让视图与当前 temp_len 对齐 */
     posrev_init_round(&position_revise, &posrev_cap, posrev_len_view);//这个就会重置position_revise为-1 代码逻辑是对的
+
+    //创建一个算子操作矩阵
+    u32 operator_revise_array[OPREV_CAP];
+    u32 operator_revise_len=(u32)temp_len;
+    for (u32 ii = 0; ii < OPREV_CAP; ++ii) operator_revise_array[ii] = -1;
+
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
@@ -8255,7 +8331,7 @@ havoc_stage:
       // int opt_case=select_algorithm( extras_cnt + a_extras_cnt );
       // fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
       // fprintf(fp,"%d %d\n",i,opt_case);
-      // switch (opt_case) {
+       // switch (opt_case) {
         // case 0:
 
         //   /* Flip a single bit somewhere. Spooky! */
@@ -8275,6 +8351,7 @@ havoc_stage:
 							FLIP_BIT(out_buf,bit);
 							stage_finds_times[0] += 1;
               if (pos < posrev_len_view) position_revise[pos]=0;
+              if (pos < temp_len) operator_revise_array[pos] = 0;
 							break;
               }
         // case 1:
@@ -8295,6 +8372,13 @@ havoc_stage:
               u32 byte2 = byte1 + 1;
               if (byte1 < posrev_len_view) position_revise[byte1]=1;
               if (byte2 < posrev_len_view) position_revise[byte2]=1;
+
+              {
+                u32 byte1 = temp_len_puppet >> 3;
+                u32 byte2 = byte1 + 1;
+                if (byte1 < temp_len) operator_revise_array[byte1] = 1;
+                if (byte2 < temp_len) operator_revise_array[byte2] = 1;
+              }
 							break;
         }
         // case 2:
@@ -8331,6 +8415,14 @@ havoc_stage:
               if (byte1 < posrev_len_view) position_revise[byte1]=2;
               if (byte2 < posrev_len_view) position_revise[byte2]=2;
               if (byte3 < posrev_len_view) position_revise[byte3]=2;
+              {
+                u32 byte1 = temp_len_puppet >> 3;
+                u32 byte2 = byte1 + 1;
+                u32 byte3 = byte2 + 1;
+                if (byte1 < temp_len) operator_revise_array[byte1] = 2;
+                if (byte2 < temp_len) operator_revise_array[byte2] = 2;
+                if (byte3 < temp_len) operator_revise_array[byte3] = 2;
+              }
 							break;
         }
         // case 3:
@@ -8359,6 +8451,7 @@ havoc_stage:
 							out_buf[pos] ^= 0xFF;
 							stage_finds_times[3] += 1;
               if (pos < posrev_len_view) position_revise[pos]=3;
+              if (pos < temp_len) operator_revise_array[pos] = 3;
 							break;
         }
         // case 4:
@@ -8375,6 +8468,8 @@ havoc_stage:
 							*(u16*)(out_buf + pos) ^= 0xFFFF;
 							stage_finds_times[4] += 1;
               if (pos < posrev_len_view) position_revise[pos]=4;
+              if (pos < temp_len) operator_revise_array[pos] = 4;
+              if (pos + 1 < temp_len) operator_revise_array[pos + 1] = 4;
 							break;
         }
         // case 5:
@@ -8391,6 +8486,10 @@ havoc_stage:
 							*(u32*)(out_buf + pos) ^= 0xFFFFFFFF;
 							stage_finds_times[5] += 1;
               if (pos < posrev_len_view) position_revise[pos]=5;
+
+              for (u32 k = 0; k < 4; ++k) {
+                if (pos + k < temp_len) operator_revise_array[pos + k] = 5;
+              }
 							break;
         }
         // case 6:
@@ -8425,6 +8524,9 @@ havoc_stage:
 							stage_finds_times[6] += 1;
               if (pos1 < posrev_len_view) position_revise[pos1]=6;
               if (pos2 < posrev_len_view) position_revise[pos2]=6;
+
+              if (pos1 < temp_len) operator_revise_array[pos1] = 6;
+              if (pos2 < temp_len) operator_revise_array[pos2] = 6;
 							break;
         }
         // case 7:
@@ -8479,6 +8581,8 @@ havoc_stage:
               mutate_arr[i].sites =pos;
               
               if (pos < posrev_len_view) position_revise[pos]=7;
+              if (pos < temp_len) operator_revise_array[pos] = 7;
+
 							break;
             }
         // case 8:
@@ -8533,6 +8637,10 @@ havoc_stage:
 							stage_finds_times[8] += 1;
               mutate_arr[i].sites =pos;
               if (pos < posrev_len_view) position_revise[pos]=8;
+
+              for (u32 k = 0; k < 4; ++k) {
+                if (pos + k < temp_len) operator_revise_array[pos + k] = 8;
+              }
 							break;
             }
         // case 9:
@@ -8566,6 +8674,7 @@ havoc_stage:
 							stage_finds_times[9] += 1;
               mutate_arr[i].sites =pos;
               if (pos < posrev_len_view) position_revise[pos]=9;
+              if (pos < temp_len) operator_revise_array[pos] = 9;
 							break;
         }
         // case 10:
@@ -8592,6 +8701,8 @@ havoc_stage:
 							stage_finds_times[10] += 1;
               mutate_arr[i].sites =pos;
               if (pos < posrev_len_view) position_revise[pos]=10;
+              if (pos < temp_len) operator_revise_array[pos] = 10;
+              if (pos + 1 < temp_len) operator_revise_array[pos + 1] = 10;
 							break;
             }
         // case 11 ... 12: {
@@ -8636,6 +8747,9 @@ havoc_stage:
 							 stage_finds_times[11] += 1;
                mutate_arr[i].sites =pos;
                if (pos < posrev_len_view) position_revise[pos]=11;
+               for (u32 k = 0; k < 4; ++k) {
+                  if (pos + k < temp_len) operator_revise_array[pos + k] = 11;
+                }
 							break;
             }
         case 12:{
@@ -8648,6 +8762,7 @@ havoc_stage:
 							 stage_finds_times[12] += 1;
                mutate_arr[i].sites =pos;
               if (pos < posrev_len_view)  position_revise[pos]=12;
+              if (pos < temp_len) operator_revise_array[pos] = 12;
 							break;
         }
         // case 13:
@@ -8717,6 +8832,12 @@ havoc_stage:
  
               /* 先同步 position_revise 的删除（使用当前逻辑长度视图） */
               posrev_delete(position_revise, del_from, del_len, &posrev_len_view);
+              if (del_from < temp_len) {
+                u32 end = del_from + del_len;
+                for (u32 k = del_from; k < end && k < temp_len; ++k) {
+                  operator_revise_array[k] = 13;
+                }
+              }
 
 							memmove(out_buf + del_from, out_buf + del_from + del_len,
 								temp_len - del_from - del_len);
@@ -8818,6 +8939,49 @@ havoc_stage:
                 mutate_arr[i].sites =clone_to;
                 mutate_arr[i].del_num = clone_len;
                 // if (clone_to < posrev_len_view) position_revise[clone_to] = 14; 
+                /* ---------- case 14: clone/insert block — 更新 operator_revise_array ---------- */
+                /* 插入位置: clone_to, 插入长度: clone_len */
+                /* operator_revise_len 为插入前长度（old_len） */
+                u32 old_len = operator_revise_len;
+                u32 ins_pos = clone_to;
+                u32 ins_len = clone_len;
+
+                /* 限制：不要超过静态容量 OPREV_CAP */
+                if (ins_len > 0) {
+                    if (old_len > OPREV_CAP) old_len = OPREV_CAP;
+                    /* 截断插入长度以适配容量 */
+                    if (old_len + ins_len > OPREV_CAP) {
+                        ins_len = OPREV_CAP - old_len;
+                        /* 同时你也应调整 out_buf/temp_len 与实际插入字节数一致，
+                          这里假设 out_buf 已按原 ins_len 插入；若不一致需同步裁剪 out_buf。 */
+                    }
+
+                    /* 右移已有标签，从后往前移动避免覆盖 */
+                    u32 moved = (old_len > ins_pos) ? (old_len - ins_pos) : 0;
+                    if (moved > 0) {
+                        /* memmove 安全，也可用逆向循环 */
+                        memmove(&operator_revise_array[ins_pos + ins_len],
+                                &operator_revise_array[ins_pos],
+                                sizeof(int) * moved);
+                    }
+
+                    /* 将插入区标为 14（注意 ins_len 可能已被截断） */
+                    for (u32 k = 0; k < ins_len; ++k) {
+                        u32 idx = ins_pos + k;
+                        if (idx < OPREV_CAP) operator_revise_array[idx] = 14;
+                    }
+
+                    /* 清理余下位置（新尾部）为 -1（可选） */
+                    u32 new_len = (old_len + ins_len);
+                    if (new_len > OPREV_CAP) new_len = OPREV_CAP;
+                    for (u32 k = new_len; k < OPREV_CAP; ++k) operator_revise_array[k] = -1;
+
+                    /* 更新有效长度 */
+                    operator_revise_len = new_len;
+                    /* 同步 temp_len（如果你希望用 operator_revise_len 作为真实长度） */
+                    // temp_len = (s32)operator_revise_len;
+                }
+
 							}
 
 							break;
@@ -8890,6 +9054,10 @@ havoc_stage:
                mutate_arr[i].sites =copy_to;
                mutate_arr[i].del_num = copy_len;
               //  position_revise[copy_to]=15;
+              for (u32 k = 0; k < copy_len; ++k) {
+                  u32 idx = copy_to + k;
+                  if (idx < temp_len) operator_revise_array[idx] = 15;
+              }
 							break;
 
 						}
@@ -8980,6 +9148,11 @@ havoc_stage:
                   // if (end > posrev_len_view) end = posrev_len_view;
                   for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
                     mutate_arr[i].sites =insert_at;
+
+                  for (u32 k = 0; k < extra_len; ++k) {
+                    u32 idx = insert_at + k;
+                    if (idx < temp_len) operator_revise_array[idx] = 16;
+                  }
                   }
                   stage_finds_times[16] += 1;
                   
@@ -9045,6 +9218,32 @@ havoc_stage:
                   mutate_arr[i].sites =insert_at;
                   mutate_arr[i].del_num = extra_len;
                   // if (insert_at < posrev_len_view) position_revise[insert_at] = 17;
+                  /* ---------- case 17: insert extra — 更新 operator_revise_array ---------- */
+                  u32 old_len = operator_revise_len;
+                  u32 ins_pos = insert_at;
+                  u32 ins_len = extra_len;
+
+                  if (ins_len > 0) {
+                      if (old_len > OPREV_CAP) old_len = OPREV_CAP;
+                      if (old_len + ins_len > OPREV_CAP) {
+                          ins_len = OPREV_CAP - old_len;
+                      }
+                      u32 moved = (old_len > ins_pos) ? (old_len - ins_pos) : 0;
+                      if (moved > 0) {
+                          memmove(&operator_revise_array[ins_pos + ins_len],
+                                  &operator_revise_array[ins_pos],
+                                  sizeof(int) * moved);
+                      }
+                      for (u32 k = 0; k < ins_len; ++k) {
+                          u32 idx = ins_pos + k;
+                          if (idx < OPREV_CAP) operator_revise_array[idx] = 17;
+                      }
+                      u32 new_len = old_len + ins_len;
+                      if (new_len > OPREV_CAP) new_len = OPREV_CAP;
+                      for (u32 k = new_len; k < OPREV_CAP; ++k) operator_revise_array[k] = -1;
+                      operator_revise_len = new_len;
+                  }
+
                   break;
 
             }
@@ -9073,6 +9272,17 @@ havoc_stage:
     //记录关心指标复原后的分数
     u64 prox_score_after = compute_proximity_score();
     fprintf(fp,"\n prox_score_before prox_score_after %lld,%lld:\n",prox_score_before_before,prox_score_after);
+
+    /* 同理，这里也拷贝一份，避免与 before 指针指向同一静态区导致的值被覆盖 */
+    // u32 output_vector_after[OUTPUT_DIM_SIZE];
+    // memcpy(output_vector_after, get_output_vector(), sizeof(output_vector_after));
+    double output_vector_after[OUTPUT_DIM_SIZE];
+     memcpy(output_vector_after, get_output_vector_log(), sizeof(output_vector_after));
+    // fprintf(fp_output,"output_vector_after ");
+    // for(int j=0;j<OUTPUT_DIM_SIZE;j++){
+    //   fprintf(fp_output,"%d ",output_vector_after[j]);
+    // }
+    // fprintf(fp_output,"\n");
     
     /* If we're finding new stuff, let's run for a bit longer, limits
        permitting. */
@@ -9099,9 +9309,36 @@ havoc_stage:
       if (posrev_len_view>max_position_revise_ever_case){
       max_position_revise_ever_case=posrev_len_view;//更换最大的长度  
       }
-      if (max_position_revise_ever_case>10000) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
+      if (max_position_revise_ever_case> OPREV_CAP) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
       FATAL("max_position_revise_ever_case>10000! ");
       }
+
+
+      //我们记录算子操作矩阵不再限制有新路径的前提上，只要执行都算
+       for(int i=0;i<OUTPUT_DIM_SIZE;i++){
+            // fprintf(fp_output,"OUTPUT_DIM_SIZE\n ");
+            // fprintf(fp_output,"output_vector_before[i] %d ",output_vector_before[i]);
+            // fprintf(fp_output,"output_vector_after[i] %d ",output_vector_after[i]);
+          if(output_vector_before[i]!=output_vector_after[i]){//如果有一个不一样，说明操作前后输出向量发生变化,那么就记录
+            //记录输出向量
+            fprintf(fp_output,"output_vector_after ");
+            for(int j=0;j<OUTPUT_DIM_SIZE;j++){
+              // fprintf(fp_output,"%d ",output_vector_after[j]);
+              fprintf(fp_output,"%.2f ",output_vector_after[j]);
+            }
+            fprintf(fp_output,"\n");
+            //记录算子操作矩阵
+            fprintf(fp_output,"operator_revise_array ");
+            for (int j=0;j<operator_revise_len;j++){
+              if(j%16==0) fprintf(fp_output,"\n ");
+              fprintf(fp_output,"%d ",operator_revise_array[j]);
+            }  
+            fprintf(fp_output,"\n");
+            fprintf(fp_output,"------------------\n");//使用这个来区分同一个case下的不同变异
+            break;
+        }
+       }
+      
 
     //更新变异算子概率分布
     if (unlikely(queued_paths + unique_crashes > temp_total_found))
@@ -9193,46 +9430,46 @@ havoc_stage:
        for (int i=0;i<posrev_len_view;i++){
           if(i%16==0) fprintf(fp,"\n ");
         	fprintf(fp,"%d ",position_revise[i]);
-       }      
+       }
         //这个打印得做一些优化，不然太大了
         //1. 如果一个位置某个算子从来没用过，就不打印
         //2. 
-        fprintf(fp1,"------------------------------------------\n");
-        fprintf(fp1,">0\n");
-        fprintf(fp1,"\npos: 0\n");
-        for (int i=0;i<max_position_revise_ever_case;i++){
-            int flag_for_print=0;
-            for(int j=0;j<operator_num;j++){
-              if(operator_usage_count_for_add[i][j]==0 && operator_usage_scores_for_add[i][j]==0){
-                  continue;
-              }
-              fprintf(fp1,"%d,%lld,%lld\t",j,operator_usage_count_for_add[i][j],operator_usage_scores_for_add[i][j]);
-              flag_for_print=1;
-            } 	
-            if (flag_for_print==1 && i<max_position_revise_ever_case){
-              fprintf(fp1,"\npos: %d",i+1);//这样可以不打印所有的算子都为0时候的pos那一行
-              fprintf(fp1,"\n");
-            }
+        // fprintf(fp1,"------------------------------------------\n");
+        // fprintf(fp1,">0\n");
+        // fprintf(fp1,"\npos: 0\n");
+        // for (int i=0;i<max_position_revise_ever_case;i++){
+        //     int flag_for_print=0;
+        //     for(int j=0;j<operator_num;j++){
+        //       if(operator_usage_count_for_add[i][j]==0 && operator_usage_scores_for_add[i][j]==0){
+        //           continue;
+        //       }
+        //       fprintf(fp1,"%d,%lld,%lld\t",j,operator_usage_count_for_add[i][j],operator_usage_scores_for_add[i][j]);
+        //       flag_for_print=1;
+        //     } 	
+        //     if (flag_for_print==1 && i<max_position_revise_ever_case){
+        //       fprintf(fp1,"\npos: %d",i+1);//这样可以不打印所有的算子都为0时候的pos那一行
+        //       fprintf(fp1,"\n");
+        //     }
             
-        }
+        // }
 
-        fprintf(fp1,"\n------------------------------------------\n");
-          fprintf(fp1,"<0\n");
-          fprintf(fp1,"\npos: 0\n");
-          for (int i=0;i<max_position_revise_ever_case;i++){
-              int flag_for_print=0;
-              for(int j=0;j<operator_num;j++){
-                if(operator_usage_count_for_sub[i][j]==0 && operator_usage_scores_for_sub[i][j]==0){
-                  continue;
-                }
-                fprintf(fp1,"%d,%lld,%lld\t",j,operator_usage_count_for_sub[i][j],operator_usage_scores_for_sub[i][j]);
-                flag_for_print=1;
-              } 	
-              if (flag_for_print==1 && i<max_position_revise_ever_case){
-                fprintf(fp1,"\npos: %d",i+1);//这样可以不打印所有的算子都为0时候的pos那一行
-                fprintf(fp1,"\n");
-              }
-          }
+        // fprintf(fp1,"\n------------------------------------------\n");
+        //   fprintf(fp1,"<0\n");
+        //   fprintf(fp1,"\npos: 0\n");
+        //   for (int i=0;i<max_position_revise_ever_case;i++){
+        //       int flag_for_print=0;
+        //       for(int j=0;j<operator_num;j++){
+        //         if(operator_usage_count_for_sub[i][j]==0 && operator_usage_scores_for_sub[i][j]==0){
+        //           continue;
+        //         }
+        //         fprintf(fp1,"%d,%lld,%lld\t",j,operator_usage_count_for_sub[i][j],operator_usage_scores_for_sub[i][j]);
+        //         flag_for_print=1;
+        //       } 	
+        //       if (flag_for_print==1 && i<max_position_revise_ever_case){
+        //         fprintf(fp1,"\npos: %d",i+1);//这样可以不打印所有的算子都为0时候的pos那一行
+        //         fprintf(fp1,"\n");
+        //       }
+        //   }
       }
   //这里是for循环结束 也就是一轮变异结束
   new_hit_cnt = queued_paths + unique_crashes;
@@ -10954,6 +11191,13 @@ int main(int argc, char** argv) {
     if (fp1 == NULL)
     {
       SAYF("Failed to open record_for_ana.txt\n");
+      exit(1);
+    }
+
+    fp_output = fopen("/cma-log/output_for_ana.txt", "w");
+    if (fp_output == NULL)
+    {
+      SAYF("Failed to open output_for_ana.txt\n");
       exit(1);
     }
     
