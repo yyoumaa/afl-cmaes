@@ -147,7 +147,7 @@ u64 max_position_revise_ever_case = 0;//记录每个case的最长数组位置
 time_t timer;
 
 FILE *fp_output;
-u32 output_dim[10]={1,2,3,4,5,6,7,8};
+u32 output_dim[11]={1,2,3,4,5,6,7,8,9,10,11};
 #define OUTPUT_DIM_SIZE (sizeof(output_dim) / sizeof(output_dim[0]))
 #define OPREV_CAP 10000
 
@@ -8285,6 +8285,7 @@ havoc_stage:
    fprintf(fp_output,"output_vector_before ");
    for(int i=0;i<OUTPUT_DIM_SIZE;i++){
      fprintf(fp_output,"%.2f ",output_vector_before[i]);
+    //  fprintf(fp_output,"%d ",output_vector_before[i]);
    }
    fprintf(fp_output,"\n");
 
@@ -9306,11 +9307,14 @@ havoc_stage:
       }
 
       fprintf(fp1,"%d\n",posrev_len_view);//记录当前变异后文件长度
-      if (posrev_len_view>max_position_revise_ever_case){
-      max_position_revise_ever_case=posrev_len_view;//更换最大的长度  
-      }
-      if (max_position_revise_ever_case> OPREV_CAP) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
-      FATAL("max_position_revise_ever_case>10000! ");
+      // if (posrev_len_view>max_position_revise_ever_case){
+      // max_position_revise_ever_case=posrev_len_view;//更换最大的长度  
+      // }
+      if (posrev_len_view> OPREV_CAP) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
+      // FATAL("max_position_revise_ever_case>10000! ");
+      //超过了就跳过这次执行
+      fprintf(fp_output,"goto havoc_stage;\n");
+      goto havoc_stage;
       }
 
 
@@ -9330,7 +9334,7 @@ havoc_stage:
             //记录算子操作矩阵
             fprintf(fp_output,"operator_revise_array ");
             for (int j=0;j<operator_revise_len;j++){
-              if(j%16==0) fprintf(fp_output,"\n ");
+              // if(j%16==0) fprintf(fp_output,"\n ");
               fprintf(fp_output,"%d ",operator_revise_array[j]);
             }  
             fprintf(fp_output,"\n");
