@@ -86,7 +86,7 @@ typedef struct {
 Mutate_arr mutate_arr[256] = {0};
 
 u32 mutate_count = 0;
-
+int if_use_nn_select=0;//是否使用神经网络选择算子
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -960,18 +960,18 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det, u64 prox_score) {
 
     u32 i = 0;
   
-  fprintf(mutate_fp, "\n%s\n", q->fname);
-  for (i = 0; i < mutate_count; i++) {
-    if(i==0){
-      fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d  Split_at: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num, mutate_arr[i].split_at);
+  // fprintf(mutate_fp, "\n%s\n", q->fname);
+  // for (i = 0; i < mutate_count; i++) {
+  //   if(i==0){
+  //     fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d  Split_at: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num, mutate_arr[i].split_at);
 
-    }else{
-      fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
-    }
-  }
+  //   }else{
+  //     fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+  //   }
+  // }
   
-  mutate_count = 0;
-  memset(mutate_arr, 0, sizeof(mutate_arr));
+  // mutate_count = 0;
+  // memset(mutate_arr, 0, sizeof(mutate_arr));
 }
 
 /* Sort the queue based on the proximity score. Needed after the dry-run. */
@@ -1224,55 +1224,140 @@ static u32 count_non_255_bytes(u8* mem) {
 
 }
 
-static u32* get_output_vector(void)
-{
-    static u32 output_vector[OUTPUT_DIM_SIZE] = {0};
+// static u32* get_output_vector(void)
+// {
+//     static u32 output_vector[OUTPUT_DIM_SIZE] = {0};
 
-    // 初始化为 0（可省略，因为 static 会自动置 0）
-    for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
-        output_vector[i] = 0;
-    }
+//     // 初始化为 0（可省略，因为 static 会自动置 0）
+//     for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
+//         output_vector[i] = 0;
+//     }
 
-    // 遍历 dfg_bits
-    for (u32 i = 0; i < DFG_MAP_SIZE; i++) {
-        u32 v = dfg_bits[i];
+//     // 遍历 dfg_bits
+//     for (u32 i = 0; i < DFG_MAP_SIZE; i++) {
+//         u32 v = dfg_bits[i];
 
-        // 检查是否与 output_dim 中任一项匹配
-        for (u32 j = 0; j < OUTPUT_DIM_SIZE; j++) {
-            if (v == output_dim[j]) {
-                output_vector[j] = 1;
-            }
-        }
-    }
+//         // 检查是否与 output_dim 中任一项匹配
+//         for (u32 j = 0; j < OUTPUT_DIM_SIZE; j++) {
+//             if (v == output_dim[j]) {
+//                 output_vector[j] = 1;
+//             }
+//         }
+//     }
 
-    return output_vector;
-}
+//     return output_vector;
+// }
 
-static double* get_output_vector_log(void)
-{
-    static double output_vector_time[OUTPUT_DIM_SIZE] = {0};
+// static double* get_output_vector_log(void)
+// {
+//     static double output_vector_time[OUTPUT_DIM_SIZE] = {0};
 
-    // 初始化为 0（可省略，因为 static 会自动置 0）
-    for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
-        output_vector_time[i] = 0;
-    }
+//     // 初始化为 0（可省略，因为 static 会自动置 0）
+//     for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
+//         output_vector_time[i] = 0;
+//     }
 
-    // 遍历 dfg_bits
-    for (u32 i = 0; i < DFG_MAP_SIZE; i++) {
-        u32 v = dfg_bits[i];
+//     // 遍历 dfg_bits
+//     for (u32 i = 0; i < DFG_MAP_SIZE; i++) {
+//         u32 v = dfg_bits[i];
 
-        // 检查是否与 output_dim 中任一项匹配
-        for (u32 j = 0; j < OUTPUT_DIM_SIZE; j++) {
-            if (v == output_dim[j]) {
-                output_vector_time[j] += 1;
-            }
-        }
-    }
-     for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
-        output_vector_time[i] = log(output_vector_time[i]);
-    }
+//         // 检查是否与 output_dim 中任一项匹配
+//         for (u32 j = 0; j < OUTPUT_DIM_SIZE; j++) {
+//             if (v == output_dim[j]) {
+//                 output_vector_time[j] += 1;
+//             }
+//         }
+//     }
+//      for (u32 i = 0; i < OUTPUT_DIM_SIZE; i++) {
+//         output_vector_time[i] = log(output_vector_time[i]);
+//     }
 
-    return output_vector_time;
+//     return output_vector_time;
+// }
+
+// NN-based operator selection from a CSV file `test`.
+// The file format (header + rows):
+//   pos,op,score
+//   0,14,0.0207436
+//   19,0,0.00861488
+// We ignore the header and score column; randomly choose one (pos, op) pair.
+// Fallback: if the file is missing or invalid, pick random method & position.
+static inline void select_algorithm_nn(u32* out_method, u32* out_pos, u32 cur_len, u32 op_cap) {
+  if (!out_method || !out_pos) return;
+
+  FILE* f = fopen("/cma-log/test.txt", "r");
+  if (!f) goto fallback;
+
+  // Simple dynamic buffer to store up to OPREV_CAP entries
+  // Each entry is two u32s: pos and op
+  static u32 pairs_pos[OPREV_CAP];
+  static u32 pairs_op[OPREV_CAP];
+  u32 count = 0;
+
+  // Read line by line. Skip the first header line if present.
+  char line[256];
+  if (fgets(line, sizeof(line), f) == NULL) { // empty file
+    fclose(f);
+    goto fallback;
+  }
+  // Heuristically check if first line is header containing non-digit
+  // We don't strictly need to check; we'll attempt to parse subsequent lines.
+
+  while (count < OPREV_CAP && fgets(line, sizeof(line), f)) {
+    // Expected format: pos,op,score
+    // We'll parse first two comma-separated values as integers.
+    char* p = line;
+    // Trim leading spaces
+    while (*p == ' ' || *p == '\t') p++;
+    // Skip empty or comment lines
+    if (*p == '\0' || *p == '\n' || *p == '#') continue;
+
+    // Find first comma
+    char* c1 = strchr(p, ',');
+    if (!c1) continue;
+    *c1 = '\0';
+    char* p2 = c1 + 1;
+    // Find second comma
+    char* c2 = strchr(p2, ',');
+    if (c2) *c2 = '\0';
+
+    // Parse pos and op as base-10 integers
+    char* end1 = NULL; char* end2 = NULL;
+    long pos_v = strtol(p, &end1, 10);
+    long op_v  = strtol(p2, &end2, 10);
+    if ((end1 == p) || (end2 == p2)) continue; // parse failure
+    if (pos_v < 0 || op_v < 0) continue;       // ignore negatives
+
+    // Bound checks: pos within current length; op within operator_num
+    u32 pos_u = (u32)pos_v;
+    u32 op_u  = (u32)op_v;
+    if (cur_len > 0 && pos_u >= cur_len) pos_u = cur_len - 1; // clamp
+    if (op_u >= operator_num) op_u = operator_num - 1;         // clamp
+
+    pairs_pos[count] = pos_u;
+    pairs_op[count]  = op_u;
+    count++;
+  }
+
+  fclose(f);
+
+  if (count > 0) {
+    u32 idx = UR(count);
+    *out_pos    = pairs_pos[idx];
+    *out_method = pairs_op[idx];
+    return;
+  }
+
+fallback:
+  // Fallback implementation: pick a random valid method and a random position.
+  {
+    u32 max_method = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
+  if (op_cap < max_method) max_method = op_cap; // respect operator cap
+    u32 m = UR(max_method ? max_method : 1);
+    u32 p = cur_len ? UR(cur_len) : 0;
+    *out_method = m;
+    *out_pos = p;
+  }
 }
 
 static u64 compute_proximity_score(void) {
@@ -3561,14 +3646,14 @@ keep_as_crash:
                         describe_op(0));
       u32 i = 0;
   
-      fprintf(mutate_fp, "\n%s\n", fn);
-      for (i = 0; i < mutate_count; i++) {
-        if(i==0){
-          fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d  Split_at: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num, mutate_arr[i].split_at);
-        }else{
-          fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
-        }
-      }
+      // fprintf(mutate_fp, "\n%s\n", fn);
+      // for (i = 0; i < mutate_count; i++) {
+      //   if(i==0){
+      //     fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d  Split_at: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num, mutate_arr[i].split_at);
+      //   }else{
+      //     fprintf(mutate_fp, "Element %d: Method: %d  Inmeth: %d  Sites: %d  Del_num: %d\n", i, mutate_arr[i].method, mutate_arr[i].inmeth, mutate_arr[i].sites, mutate_arr[i].del_num);
+      //   }
+      // }
       mutate_count = 0;
       memset(mutate_arr, 0, sizeof(mutate_arr));
 
@@ -8280,14 +8365,14 @@ havoc_stage:
       //排查了半天 还得是ai
   //  u32 output_vector_before[OUTPUT_DIM_SIZE];
   //  memcpy(output_vector_before, get_output_vector(), sizeof(output_vector_before));
-  double output_vector_before[OUTPUT_DIM_SIZE];
-   memcpy(output_vector_before, get_output_vector_log(), sizeof(output_vector_before));
-   fprintf(fp_output,"output_vector_before ");
-   for(int i=0;i<OUTPUT_DIM_SIZE;i++){
-     fprintf(fp_output,"%.2f ",output_vector_before[i]);
-    //  fprintf(fp_output,"%d ",output_vector_before[i]);
-   }
-   fprintf(fp_output,"\n");
+  // double output_vector_before[OUTPUT_DIM_SIZE];
+  //  memcpy(output_vector_before, get_output_vector_log(), sizeof(output_vector_before));
+  //  fprintf(fp_output,"output_vector_before ");
+  //  for(int i=0;i<OUTPUT_DIM_SIZE;i++){
+  //    fprintf(fp_output,"%.2f ",output_vector_before[i]);
+  //   //  fprintf(fp_output,"%d ",output_vector_before[i]);
+  //  }
+  //  fprintf(fp_output,"\n");
 
   s32 temp_len_puppet;
   // s32 len_for_pos=len;
@@ -8296,21 +8381,12 @@ havoc_stage:
   s32  posrev_cap = 0;           /* 新增：容量 */
   u32  posrev_len_view;          /* 新增：与 temp_len 同步的“逻辑长度视图” */
 
-  /* 初次分配（函数开头处）：用当前 len 作为初始容量，或给个保守值 */
-  posrev_cap = (s32)(len > 0 ? len : 64);
-  position_revise = ck_alloc_nozero((size_t)posrev_cap * sizeof(*position_revise));
-  for (s32 i = 0; i < posrev_cap; ++i) position_revise[i] = -1;
 
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) { //每循环一轮这个，更新算子增加分数
     
     posrev_len_view = (u32)temp_len;               /* 让视图与当前 temp_len 对齐 */
     posrev_init_round(&position_revise, &posrev_cap, posrev_len_view);//这个就会重置position_revise为-1 代码逻辑是对的
-
-    //创建一个算子操作矩阵
-    u32 operator_revise_array[OPREV_CAP];
-    u32 operator_revise_len=(u32)temp_len;
-    for (u32 ii = 0; ii < OPREV_CAP; ++ii) operator_revise_array[ii] = -1;
 
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
@@ -8323,302 +8399,229 @@ havoc_stage:
     }
 
     mutate_count = use_stacking;//记录单次变异个数 
+    // 在使用前初始化（一次）
+    for (size_t k = 0; k < mutate_count; ++k) {
+        mutate_arr[k].sites = UINT32_MAX; // 表示未设置
+        mutate_arr[k].del_num = 0;
+    }
 
-    for (i = 0; i < use_stacking; i++) {
-      //这里注释哪行选择启用不启用cma-es算法选择算子
-       mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+   if(queued_paths>20) if_use_nn_select=1;
+    
+   for (i = 0; i < use_stacking; i++) {
+    int flagforpos=0;
+
+    if(if_use_nn_select){
+      if(UR(2)){//50%概率使用nn选择
+        u32 method_nn = 0;
+        u32 pos_nn = 0;
+        select_algorithm_nn(&method_nn, &pos_nn, (u32)temp_len, (u32)operator_num);
+        mutate_arr[i].method = method_nn;
+        mutate_arr[i].sites  = pos_nn;
+        flagforpos=1;
+        if (mutate_fp) {
+          fprintf(mutate_fp, "NN-select: idx=%u method=%u pos=%u\n", i, method_nn, pos_nn);
+        }
+      }else{
+        mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+        if (mutate_fp) {
+          fprintf(mutate_fp, "NN-off random method: idx=%u method=%u\n", i, mutate_arr[i].method);
+        }
+      } 
+    }else {
+      mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+    }
+       if (flagforpos) {
+
+        u32 pos = mutate_arr[i].sites;
+        int invalid = 0;
+
+        switch (mutate_arr[i].method) {
+
+          case 0: /* bit flip */
+            if (pos >= temp_len) invalid = 1;
+            break;
+
+          case 1:
+            if ((pos << 3) + 1 >= (temp_len << 3)) invalid = 1;
+            break;
+
+          case 2:
+            if ((pos << 3) + 3 >= (temp_len << 3)) invalid = 1;
+            break;
+
+          case 3:
+          case 6:
+          case 9:
+          case 12:
+            if (pos >= temp_len) invalid = 1;
+            break;
+
+          case 4:
+          case 7:
+          case 10:
+            if (pos + 1 >= temp_len) invalid = 1;
+            break;
+
+          case 5:
+          case 8:
+          case 11:
+            if (pos + 3 >= temp_len) invalid = 1;
+            break;
+
+          case 13: /* delete */
+            if (pos >= temp_len - 1) invalid = 1;
+            break;
+
+          case 14: /* clone insert */
+          case 17: /* insert extra */
+            if (pos > temp_len) invalid = 1;
+            break;
+
+          case 15: /* overwrite */
+            if (pos >= temp_len) invalid = 1;
+            break;
+
+          case 16: /* overwrite extra */
+            if (pos >= temp_len) invalid = 1;
+            break;
+
+          default:
+            invalid = 1;
+            break;
+        }
+
+        if (invalid) {
+          flagforpos = 0;   // 🚨 回退到随机
+          if (mutate_fp) {
+            fprintf(mutate_fp,
+              "NN-pos invalid: idx=%u method=%u pos=%u temp_len=%u -> fallback\n",
+              i, mutate_arr[i].method, pos, temp_len);
+          }
+        }
+      }
+
       switch (mutate_arr[i].method) {
+      //这里注释哪行选择启用不启用cma-es算法选择算子
       // switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
       // int opt_case=select_algorithm( extras_cnt + a_extras_cnt );
       // fprintf(fp,"\nfor (i = 0; i < use_stacking; i++) {\n");
       // fprintf(fp,"%d %d\n",i,opt_case);
        // switch (opt_case) {
-        // case 0:
-
-        //   /* Flip a single bit somewhere. Spooky! */
-
-        //   FLIP_BIT(out_buf, UR(temp_len << 3));
-        //   stage_finds_times[0] += 1;
-        //   break;
         case 0:{
 							/* Flip a single bit somewhere. Spooky! */
               // u32 bit = UR(temp_len << 3);
               // u32 pos = bit >> 3;   // 位 -> 字节
 							// FLIP_BIT(out_buf,bit);
 
-              u32 bit = UR(temp_len << 3);
-              u32 pos = bit >> 3;   // 位 -> 字节
-              mutate_arr[i].sites =pos;
-							FLIP_BIT(out_buf,bit);
+              u32 bit = flagforpos ? (mutate_arr[i].sites << 3) : UR(temp_len << 3);
+              u32 pos = bit >> 3;
+              mutate_arr[i].sites = pos;
+              FLIP_BIT(out_buf, bit);
 							stage_finds_times[0] += 1;
-              if (pos < posrev_len_view) position_revise[pos]=0;
-              if (pos < temp_len) operator_revise_array[pos] = 0;
 							break;
               }
-        // case 1:
 
-        //   /* Set byte to interesting value. */
-
-        //   out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
-        //   stage_finds_times[1] += 1;
-        //   break;
         case 1:{
 							if (temp_len < 2) break;
-							temp_len_puppet = UR((temp_len << 3) - 1);
+              temp_len_puppet = flagforpos ? mutate_arr[i].sites : UR((temp_len << 3) - 1);
 							FLIP_BIT(out_buf, temp_len_puppet);
 							FLIP_BIT(out_buf, temp_len_puppet + 1);
-              mutate_arr[i].sites =temp_len_puppet;
+           mutate_arr[i].sites =temp_len_puppet;
 							stage_finds_times[1] += 1;
-              u32 byte1 = temp_len_puppet >> 3;
-              u32 byte2 = byte1 + 1;
-              if (byte1 < posrev_len_view) position_revise[byte1]=1;
-              if (byte2 < posrev_len_view) position_revise[byte2]=1;
 
-              {
-                u32 byte1 = temp_len_puppet >> 3;
-                u32 byte2 = byte1 + 1;
-                if (byte1 < temp_len) operator_revise_array[byte1] = 1;
-                if (byte2 < temp_len) operator_revise_array[byte2] = 1;
-              }
 							break;
         }
-        // case 2:
-
-        //   /* Set word to interesting value, randomly choosing endian. */
-
-        //   if (temp_len < 2) break;
-
-        //   if (UR(2)) {
-
-        //     *(u16*)(out_buf + UR(temp_len - 1)) =
-        //       interesting_16[UR(sizeof(interesting_16) >> 1)];
-
-        //   } else {
-
-        //     *(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
-        //       interesting_16[UR(sizeof(interesting_16) >> 1)]);
-
-        //   }
-        //   stage_finds_times[2] += 1;
-        //   break;
+       
         case 2:{
 							if (temp_len < 2) break;
-							temp_len_puppet = UR((temp_len << 3) - 3);
+							temp_len_puppet = flagforpos ? mutate_arr[i].sites : UR((temp_len << 3) - 3);
 							FLIP_BIT(out_buf, temp_len_puppet);
 							FLIP_BIT(out_buf, temp_len_puppet + 1);
 							FLIP_BIT(out_buf, temp_len_puppet + 2);
 							FLIP_BIT(out_buf, temp_len_puppet + 3);
               mutate_arr[i].sites =temp_len_puppet;
 							stage_finds_times[2] += 1;
-              u32 byte1 = temp_len_puppet >> 3;
-              u32 byte2 = byte1 + 1;
-              u32 byte3 = byte2 + 1;
-              if (byte1 < posrev_len_view) position_revise[byte1]=2;
-              if (byte2 < posrev_len_view) position_revise[byte2]=2;
-              if (byte3 < posrev_len_view) position_revise[byte3]=2;
-              {
-                u32 byte1 = temp_len_puppet >> 3;
-                u32 byte2 = byte1 + 1;
-                u32 byte3 = byte2 + 1;
-                if (byte1 < temp_len) operator_revise_array[byte1] = 2;
-                if (byte2 < temp_len) operator_revise_array[byte2] = 2;
-                if (byte3 < temp_len) operator_revise_array[byte3] = 2;
-              }
 							break;
         }
-        // case 3:
 
-        //   /* Set dword to interesting value, randomly choosing endian. */
-
-        //   if (temp_len < 4) break;
-
-        //   if (UR(2)) {
-
-        //     *(u32*)(out_buf + UR(temp_len - 3)) =
-        //       interesting_32[UR(sizeof(interesting_32) >> 2)];
-
-        //   } else {
-
-        //     *(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
-        //       interesting_32[UR(sizeof(interesting_32) >> 2)]);
-
-        //   }
-        //   stage_finds_times[3] += 1;
-        //   break;
         case 3:{ 
 							if (temp_len < 4) break;
-              u32 pos=UR(temp_len);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len);
               mutate_arr[i].sites =pos;
 							out_buf[pos] ^= 0xFF;
 							stage_finds_times[3] += 1;
-              if (pos < posrev_len_view) position_revise[pos]=3;
-              if (pos < temp_len) operator_revise_array[pos] = 3;
 							break;
         }
-        // case 4:
 
-        //   /* Randomly subtract from byte. */
-
-        //   out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
-        //   stage_finds_times[4] += 1;
-        //   break;
         case 4:{
 							if (temp_len < 8) break;
-              u32 pos=UR(temp_len - 1);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 1);
               mutate_arr[i].sites =pos;
 							*(u16*)(out_buf + pos) ^= 0xFFFF;
 							stage_finds_times[4] += 1;
-              if (pos < posrev_len_view) position_revise[pos]=4;
-              if (pos < temp_len) operator_revise_array[pos] = 4;
-              if (pos + 1 < temp_len) operator_revise_array[pos + 1] = 4;
 							break;
         }
-        // case 5:
 
-        //   /* Randomly add to byte. */
-
-        //   out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
-        //   stage_finds_times[5] += 1;
-        //   break;
         case 5:{
 							if (temp_len < 8) break;
-              u32 pos=UR(temp_len - 3);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 3);
               mutate_arr[i].sites =pos;
 							*(u32*)(out_buf + pos) ^= 0xFFFFFFFF;
 							stage_finds_times[5] += 1;
-              if (pos < posrev_len_view) position_revise[pos]=5;
-
-              for (u32 k = 0; k < 4; ++k) {
-                if (pos + k < temp_len) operator_revise_array[pos + k] = 5;
-              }
 							break;
         }
-        // case 6:
-
-        //   /* Randomly subtract from word, random endian. */
-
-        //   if (temp_len < 2) break;
-
-        //   if (UR(2)) {
-
-        //     u32 pos = UR(temp_len - 1);
-
-        //     *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
-
-        //   } else {
-
-        //     u32 pos = UR(temp_len - 1);
-        //     u16 num = 1 + UR(ARITH_MAX);
-
-        //     *(u16*)(out_buf + pos) =
-        //       SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
-
-        //   }
-        //   stage_finds_times[6] += 1;
-        //   break;
+  
         case 6:{
-              u32 pos1=UR(temp_len);
-              u32 pos2=UR(temp_len);
+              u32 pos1 = flagforpos ? mutate_arr[i].sites : UR(temp_len);
+              u32 pos2 = UR(temp_len);
               mutate_arr[i].sites =pos1;
 							out_buf[pos1] -= 1 + UR(ARITH_MAX);
 							out_buf[pos2] += 1 + UR(ARITH_MAX);
 							stage_finds_times[6] += 1;
-              if (pos1 < posrev_len_view) position_revise[pos1]=6;
-              if (pos2 < posrev_len_view) position_revise[pos2]=6;
-
-              if (pos1 < temp_len) operator_revise_array[pos1] = 6;
-              if (pos2 < temp_len) operator_revise_array[pos2] = 6;
 							break;
         }
-        // case 7:
 
-        //   /* Randomly add to word, random endian. */
-
-        //   if (temp_len < 2) break;
-
-        //   if (UR(2)) {
-
-        //     u32 pos = UR(temp_len - 1);
-
-        //     *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
-
-        //   } else {
-
-        //     u32 pos = UR(temp_len - 1);
-        //     u16 num = 1 + UR(ARITH_MAX);
-
-        //     *(u16*)(out_buf + pos) =
-        //       SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
-
-        //   }
-        //   stage_finds_times[7] += 1;
-        //   break;
         case 7:{
 							/* Randomly subtract from word, random endian. */
 							if (temp_len < 8) break;
               u32 pos;
 							if (UR(2)) {
-								pos = UR(temp_len - 1);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 1);
 								*(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 							}
 							else {
-								pos = UR(temp_len - 1);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 1);
 								u16 num = 1 + UR(ARITH_MAX);
 								*(u16*)(out_buf + pos) =
 									SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
 							}
 							/* Randomly add to word, random endian. */
 							if (UR(2)) {
-								pos = UR(temp_len - 1);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 1);
 								*(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 							}
 							else {
-								pos = UR(temp_len - 1);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 1);
 								u16 num = 1 + UR(ARITH_MAX);
 								*(u16*)(out_buf + pos) =
 									SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 							}
 							stage_finds_times[7] += 1;
               mutate_arr[i].sites =pos;
-              
-              if (pos < posrev_len_view) position_revise[pos]=7;
-              if (pos < temp_len) operator_revise_array[pos] = 7;
 
 							break;
             }
-        // case 8:
 
-        //   /* Randomly subtract from dword, random endian. */
-
-        //   if (temp_len < 4) break;
-
-        //   if (UR(2)) {
-
-        //     u32 pos = UR(temp_len - 3);
-
-        //     *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
-
-        //   } else {
-
-        //     u32 pos = UR(temp_len - 3);
-        //     u32 num = 1 + UR(ARITH_MAX);
-
-        //     *(u32*)(out_buf + pos) =
-        //       SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
-
-        //   }
-        //   stage_finds_times[8] += 1;
-        //   break;
         case 8:{
 							/* Randomly subtract from dword, random endian. */
 							if (temp_len < 8) break;
               u32 pos;
 							if (UR(2)) {
-								pos = UR(temp_len - 3);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 3);
 								*(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 							}
 							else {
-								pos = UR(temp_len - 3);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 3);
 								u32 num = 1 + UR(ARITH_MAX);
 								*(u32*)(out_buf + pos) =
 									SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
@@ -8626,71 +8629,34 @@ havoc_stage:
 							/* Randomly add to dword, random endian. */
 							//if (temp_len < 4) break;
 							if (UR(2)) {
-								pos = UR(temp_len - 3);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 3);
 								*(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 							}
 							else {
-								pos = UR(temp_len - 3);
+								pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 3);
 								u32 num = 1 + UR(ARITH_MAX);
 								*(u32*)(out_buf + pos) =
 									SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 							}
 							stage_finds_times[8] += 1;
               mutate_arr[i].sites =pos;
-              if (pos < posrev_len_view) position_revise[pos]=8;
-
-              for (u32 k = 0; k < 4; ++k) {
-                if (pos + k < temp_len) operator_revise_array[pos + k] = 8;
-              }
 							break;
             }
-        // case 9:
 
-        //   /* Randomly add to dword, random endian. */
-
-        //   if (temp_len < 4) break;
-
-        //   if (UR(2)) {
-
-        //     u32 pos = UR(temp_len - 3);
-
-        //     *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
-
-        //   } else {
-
-        //     u32 pos = UR(temp_len - 3);
-        //     u32 num = 1 + UR(ARITH_MAX);
-
-        //     *(u32*)(out_buf + pos) =
-        //       SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
-
-        //   }
-        //   stage_finds_times[9] += 1;
-        //   break;
         case 9:{
 							/* Set byte to interesting value. */
 							if (temp_len < 4) break;
-              u32 pos=UR(temp_len);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len);
 							out_buf[pos] = interesting_8[UR(sizeof(interesting_8))];
 							stage_finds_times[9] += 1;
               mutate_arr[i].sites =pos;
-              if (pos < posrev_len_view) position_revise[pos]=9;
-              if (pos < temp_len) operator_revise_array[pos] = 9;
 							break;
         }
-        // case 10:
 
-        //   /* Just set a random byte to a random value. Because,
-        //      why not. We use XOR with 1-255 to eliminate the
-        //      possibility of a no-op. */
-
-        //   out_buf[UR(temp_len)] ^= 1 + UR(255);
-        //   stage_finds_times[10] += 1;
-        //   break;
         case 10:{
 							/* Set word to interesting value, randomly choosing endian. */
 							if (temp_len < 8) break;
-              u32 pos=UR(temp_len - 1);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 1);
 							if (UR(2)) {
 								*(u16*)(out_buf + pos) =
 									interesting_16[UR(sizeof(interesting_16) >> 1)];
@@ -8701,42 +8667,15 @@ havoc_stage:
 							}
 							stage_finds_times[10] += 1;
               mutate_arr[i].sites =pos;
-              if (pos < posrev_len_view) position_revise[pos]=10;
-              if (pos < temp_len) operator_revise_array[pos] = 10;
-              if (pos + 1 < temp_len) operator_revise_array[pos + 1] = 10;
 							break;
             }
-        // case 11 ... 12: {
-
-        //     /* Delete bytes. We're making this a bit more likely
-        //        than insertion (the next option) in hopes of keeping
-        //        files reasonably small. */
-
-        //     u32 del_from, del_len;
-
-        //     if (temp_len < 2) break;
-
-        //     /* Don't delete too much. */
-
-        //     del_len = choose_block_len(temp_len - 1);
-
-        //     del_from = UR(temp_len - del_len + 1);
-
-        //     memmove(out_buf + del_from, out_buf + del_from + del_len,
-        //             temp_len - del_from - del_len);
-
-        //     temp_len -= del_len;
-        //     stage_finds_times[11] += 1;
-        //     stage_finds_times[12] += 1;
-        //     break;
-
-        //   }
+  
         case 11:{
 							/* Set dword to interesting value, randomly choosing endian. */
 
 							if (temp_len < 8) break;
 
-              u32 pos=UR(temp_len - 3);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len - 3);
 							if (UR(2)) {
 								*(u32*)(out_buf + pos) =
 									interesting_32[UR(sizeof(interesting_32) >> 2)];
@@ -8747,10 +8686,6 @@ havoc_stage:
 							}
 							 stage_finds_times[11] += 1;
                mutate_arr[i].sites =pos;
-               if (pos < posrev_len_view) position_revise[pos]=11;
-               for (u32 k = 0; k < 4; ++k) {
-                  if (pos + k < temp_len) operator_revise_array[pos + k] = 11;
-                }
 							break;
             }
         case 12:{
@@ -8758,63 +8693,13 @@ havoc_stage:
 							/* Just set a random byte to a random value. Because,
 							   why not. We use XOR with 1-255 to eliminate the
 							   possibility of a no-op. */
-              u32 pos=UR(temp_len);
+              u32 pos = flagforpos ? mutate_arr[i].sites : UR(temp_len);
 							out_buf[pos] ^= 1 + UR(255);
 							 stage_finds_times[12] += 1;
                mutate_arr[i].sites =pos;
-              if (pos < posrev_len_view)  position_revise[pos]=12;
-              if (pos < temp_len) operator_revise_array[pos] = 12;
 							break;
         }
-        // case 13:
 
-        //   if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
-
-        //     /* Clone bytes (75%) or insert a block of constant bytes (25%). */
-
-        //     u8  actually_clone = UR(4);
-        //     u32 clone_from, clone_to, clone_len;
-        //     u8* new_buf;
-
-        //     if (actually_clone) {
-
-        //       clone_len  = choose_block_len(temp_len);
-        //       clone_from = UR(temp_len - clone_len + 1);
-
-        //     } else {
-
-        //       clone_len = choose_block_len(HAVOC_BLK_XL);
-        //       clone_from = 0;
-
-        //     }
-
-        //     clone_to   = UR(temp_len);
-
-        //     new_buf = ck_alloc_nozero(temp_len + clone_len);
-
-        //     /* Head */
-
-        //     memcpy(new_buf, out_buf, clone_to);
-
-        //     /* Inserted part */
-
-        //     if (actually_clone)
-        //       memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
-        //     else
-        //       memset(new_buf + clone_to,
-        //              UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
-
-        //     /* Tail */
-        //     memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
-        //            temp_len - clone_to);
-
-        //     ck_free(out_buf);
-        //     out_buf = new_buf;
-        //     temp_len += clone_len;
-
-        //   }
-        //   stage_finds_times[13] += 1;
-        //   break;
               case 13: {
 
 							/* Delete bytes. We're making this a bit more likely
@@ -8829,16 +8714,11 @@ havoc_stage:
 
 							del_len = choose_block_len(temp_len - 1);
 
-							del_from = UR(temp_len - del_len + 1); 
+							del_from = flagforpos ? mutate_arr[i].sites : UR(temp_len - del_len + 1);
+
+              mutate_arr[i].sites =del_from;
+              mutate_arr[i].del_num = del_len;
  
-              /* 先同步 position_revise 的删除（使用当前逻辑长度视图） */
-              posrev_delete(position_revise, del_from, del_len, &posrev_len_view);
-              if (del_from < temp_len) {
-                u32 end = del_from + del_len;
-                for (u32 k = del_from; k < end && k < temp_len; ++k) {
-                  operator_revise_array[k] = 13;
-                }
-              }
 
 							memmove(out_buf + del_from, out_buf + del_from + del_len,
 								temp_len - del_from - del_len);
@@ -8849,43 +8729,10 @@ havoc_stage:
               // assert(posrev_len_view == (u32)temp_len);
 							stage_finds_times[13] += 1;
 
-
-               /* 如果你想“标记删除发生在 del_from 位置”，此时 del_from 已经指向删除后的新字节。
-              这只是一个“事件位置”的记录方式，不代表被删除的那段。可选： */
-              // if (del_from < posrev_len_view) position_revise[del_from] = 13;
-              if (del_from > 0 && del_from - 1 < posrev_len_view) position_revise[del_from - 1] = 13;
-                mutate_arr[i].sites =del_from - 1;
-                mutate_arr[i].del_num = del_len;
-
 							break;
 
 						}
-        // case 14: {
-
-        //     /* Overwrite bytes with a randomly selected chunk (75%) or fixed
-        //        bytes (25%). */
-
-        //     u32 copy_from, copy_to, copy_len;
-
-        //     if (temp_len < 2) break;
-
-        //     copy_len  = choose_block_len(temp_len - 1);
-
-        //     copy_from = UR(temp_len - copy_len + 1);
-        //     copy_to   = UR(temp_len - copy_len + 1);
-
-        //     if (UR(4)) {
-
-        //       if (copy_from != copy_to)
-        //         memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
-
-        //     } else memset(out_buf + copy_to,
-        //                   UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
-            
-        //     stage_finds_times[14] += 1;
-        //     break;
-
-        //   }
+ 
             case 14:
             {
 							if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
@@ -8909,11 +8756,7 @@ havoc_stage:
 
 								}
 
-								clone_to = UR(temp_len);
-
-                /* -------- position_revise 同步插入 -------- */
-                posrev_insert(&position_revise, &posrev_cap,
-                              clone_to, clone_len, /*tag=*/14, &posrev_len_view);
+								clone_to = flagforpos ? mutate_arr[i].sites : UR(temp_len);
 
 								new_buf = ck_alloc_nozero(temp_len + clone_len);
 
@@ -8938,94 +8781,13 @@ havoc_stage:
 								temp_len += clone_len;
 								stage_finds_times[14] += 1;
                 mutate_arr[i].sites =clone_to;
-                mutate_arr[i].del_num = clone_len;
-                // if (clone_to < posrev_len_view) position_revise[clone_to] = 14; 
-                /* ---------- case 14: clone/insert block — 更新 operator_revise_array ---------- */
-                /* 插入位置: clone_to, 插入长度: clone_len */
-                /* operator_revise_len 为插入前长度（old_len） */
-                u32 old_len = operator_revise_len;
-                u32 ins_pos = clone_to;
-                u32 ins_len = clone_len;
-
-                /* 限制：不要超过静态容量 OPREV_CAP */
-                if (ins_len > 0) {
-                    if (old_len > OPREV_CAP) old_len = OPREV_CAP;
-                    /* 截断插入长度以适配容量 */
-                    if (old_len + ins_len > OPREV_CAP) {
-                        ins_len = OPREV_CAP - old_len;
-                        /* 同时你也应调整 out_buf/temp_len 与实际插入字节数一致，
-                          这里假设 out_buf 已按原 ins_len 插入；若不一致需同步裁剪 out_buf。 */
-                    }
-
-                    /* 右移已有标签，从后往前移动避免覆盖 */
-                    u32 moved = (old_len > ins_pos) ? (old_len - ins_pos) : 0;
-                    if (moved > 0) {
-                        /* memmove 安全，也可用逆向循环 */
-                        memmove(&operator_revise_array[ins_pos + ins_len],
-                                &operator_revise_array[ins_pos],
-                                sizeof(int) * moved);
-                    }
-
-                    /* 将插入区标为 14（注意 ins_len 可能已被截断） */
-                    for (u32 k = 0; k < ins_len; ++k) {
-                        u32 idx = ins_pos + k;
-                        if (idx < OPREV_CAP) operator_revise_array[idx] = 14;
-                    }
-
-                    /* 清理余下位置（新尾部）为 -1（可选） */
-                    u32 new_len = (old_len + ins_len);
-                    if (new_len > OPREV_CAP) new_len = OPREV_CAP;
-                    for (u32 k = new_len; k < OPREV_CAP; ++k) operator_revise_array[k] = -1;
-
-                    /* 更新有效长度 */
-                    operator_revise_len = new_len;
-                    /* 同步 temp_len（如果你希望用 operator_revise_len 作为真实长度） */
-                    // temp_len = (s32)operator_revise_len;
-                }
+                mutate_arr[i].del_num = clone_len;         
 
 							}
 
 							break;
             }
-        /* Values 15 and 16 can be selected only if there are any extras
-           present in the dictionaries. */
 
-        // case 15: {
-
-        //     /* Overwrite bytes with an extra. */
-
-        //     if (!extras_cnt || (a_extras_cnt && UR(2))) {
-
-        //       /* No user-specified extras or odds in our favor. Let's use an
-        //          auto-detected one. */
-
-        //       u32 use_extra = UR(a_extras_cnt);
-        //       u32 extra_len = a_extras[use_extra].len;
-        //       u32 insert_at;
-
-        //       if (extra_len > temp_len) break;
-
-        //       insert_at = UR(temp_len - extra_len + 1);
-        //       memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
-
-        //     } else {
-
-        //       /* No auto extras or odds in our favor. Use the dictionary. */
-
-        //       u32 use_extra = UR(extras_cnt);
-        //       u32 extra_len = extras[use_extra].len;
-        //       u32 insert_at;
-
-        //       if (extra_len > temp_len) break;
-
-        //       insert_at = UR(temp_len - extra_len + 1);
-        //       memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
-
-        //     }
-        //     stage_finds_times[15] += 1;
-        //     break;
-
-        //   }
               case 15: {
 
 							/* Overwrite bytes with a randomly selected chunk (75%) or fixed
@@ -9038,7 +8800,7 @@ havoc_stage:
 							copy_len = choose_block_len(temp_len - 1);
 
 							copy_from = UR(temp_len - copy_len + 1);
-							copy_to = UR(temp_len - copy_len + 1);
+							copy_to = flagforpos ? mutate_arr[i].sites : UR(temp_len - copy_len + 1);
 
 							if (UR(4)) {
 
@@ -9049,72 +8811,14 @@ havoc_stage:
 							else memset(out_buf + copy_to,
 								UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
 							 stage_finds_times[15] += 1;
-              //  u32 end = insert_at + extra_len;
-              // if (end > posrev_len_view) end = posrev_len_view;
-               for (u32 k = 0; k < copy_len; ++k) position_revise[copy_to + k] = 15;
+
                mutate_arr[i].sites =copy_to;
                mutate_arr[i].del_num = copy_len;
-              //  position_revise[copy_to]=15;
-              for (u32 k = 0; k < copy_len; ++k) {
-                  u32 idx = copy_to + k;
-                  if (idx < temp_len) operator_revise_array[idx] = 15;
-              }
+              
 							break;
 
 						}
 
-        // case 16: {
-
-        //     u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
-        //     u8* new_buf;
-
-        //     /* Insert an extra. Do the same dice-rolling stuff as for the
-        //        previous case. */
-
-        //     if (!extras_cnt || (a_extras_cnt && UR(2))) {
-
-        //       use_extra = UR(a_extras_cnt);
-        //       extra_len = a_extras[use_extra].len;
-
-        //       if (temp_len + extra_len >= MAX_FILE) break;
-
-        //       new_buf = ck_alloc_nozero(temp_len + extra_len);
-
-        //       /* Head */
-        //       memcpy(new_buf, out_buf, insert_at);
-
-        //       /* Inserted part */
-        //       memcpy(new_buf + insert_at, a_extras[use_extra].data, extra_len);
-
-        //     } else {
-
-        //       use_extra = UR(extras_cnt);
-        //       extra_len = extras[use_extra].len;
-
-        //       if (temp_len + extra_len >= MAX_FILE) break;
-
-        //       new_buf = ck_alloc_nozero(temp_len + extra_len);
-
-        //       /* Head */
-        //       memcpy(new_buf, out_buf, insert_at);
-
-        //       /* Inserted part */
-        //       memcpy(new_buf + insert_at, extras[use_extra].data, extra_len);
-
-        //     }
-
-        //     /* Tail */
-        //     memcpy(new_buf + insert_at + extra_len, out_buf + insert_at,
-        //            temp_len - insert_at);
-
-        //     ck_free(out_buf);
-        //     out_buf   = new_buf;
-        //     temp_len += extra_len;
-            
-        //     stage_finds_times[16] += 1;
-        //     break;
-
-        //   }
         case 16: {
 
                   /* Overwrite bytes with an extra. */
@@ -9129,10 +8833,9 @@ havoc_stage:
 
                   if (extra_len > temp_len) break;
 
-                  insert_at = UR(temp_len - extra_len + 1);
+                  insert_at = flagforpos ? mutate_arr[i].sites : UR(temp_len - extra_len + 1);
                   memcpy(out_buf + insert_at, a_extras[use_extra].data, extra_len);
-                  for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
-                    mutate_arr[i].sites =insert_at;
+                  mutate_arr[i].sites = insert_at;
                   } else {
 
                   /* No auto extras or odds in our favor. Use the dictionary. */
@@ -9143,17 +8846,12 @@ havoc_stage:
 
                   if (extra_len > temp_len) break;
 
-                  insert_at = UR(temp_len - extra_len + 1);
+                 insert_at = flagforpos ? mutate_arr[i].sites : UR(temp_len - extra_len + 1);
                   memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
                   // u32 end = insert_at + extra_len;
                   // if (end > posrev_len_view) end = posrev_len_view;
-                  for (u32 k = 0; k < extra_len; ++k) position_revise[insert_at + k] = 16;
                     mutate_arr[i].sites =insert_at;
 
-                  for (u32 k = 0; k < extra_len; ++k) {
-                    u32 idx = insert_at + k;
-                    if (idx < temp_len) operator_revise_array[idx] = 16;
-                  }
                   }
                   stage_finds_times[16] += 1;
                   
@@ -9164,7 +8862,9 @@ havoc_stage:
 
         case 17: {
 
-                  u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
+                  u32 use_extra, extra_len = UR(temp_len + 1);
+                  u32 insert_at = flagforpos ? mutate_arr[i].sites : UR(temp_len + 1);
+
                   u8* new_buf;
 
                   /* Insert an extra. Do the same dice-rolling stuff as for the
@@ -9176,8 +8876,6 @@ havoc_stage:
                   extra_len = a_extras[use_extra].len;
 
                   if (temp_len + extra_len >= MAX_FILE) break;
-                  posrev_insert(&position_revise, &posrev_cap,
-                    insert_at, extra_len, /*tag=*/17, &posrev_len_view);
 
                   new_buf = ck_alloc_nozero(temp_len + extra_len);
 
@@ -9193,10 +8891,6 @@ havoc_stage:
                   extra_len = extras[use_extra].len;
 
                   if (temp_len + extra_len >= MAX_FILE) break;
-
-                   /* -------- position_revise 同步插入 -------- */
-                  posrev_insert(&position_revise, &posrev_cap,
-                    insert_at, extra_len, /*tag=*/17, &posrev_len_view);
 
                   new_buf = ck_alloc_nozero(temp_len + extra_len);
 
@@ -9219,31 +8913,6 @@ havoc_stage:
                   mutate_arr[i].sites =insert_at;
                   mutate_arr[i].del_num = extra_len;
                   // if (insert_at < posrev_len_view) position_revise[insert_at] = 17;
-                  /* ---------- case 17: insert extra — 更新 operator_revise_array ---------- */
-                  u32 old_len = operator_revise_len;
-                  u32 ins_pos = insert_at;
-                  u32 ins_len = extra_len;
-
-                  if (ins_len > 0) {
-                      if (old_len > OPREV_CAP) old_len = OPREV_CAP;
-                      if (old_len + ins_len > OPREV_CAP) {
-                          ins_len = OPREV_CAP - old_len;
-                      }
-                      u32 moved = (old_len > ins_pos) ? (old_len - ins_pos) : 0;
-                      if (moved > 0) {
-                          memmove(&operator_revise_array[ins_pos + ins_len],
-                                  &operator_revise_array[ins_pos],
-                                  sizeof(int) * moved);
-                      }
-                      for (u32 k = 0; k < ins_len; ++k) {
-                          u32 idx = ins_pos + k;
-                          if (idx < OPREV_CAP) operator_revise_array[idx] = 17;
-                      }
-                      u32 new_len = old_len + ins_len;
-                      if (new_len > OPREV_CAP) new_len = OPREV_CAP;
-                      for (u32 k = new_len; k < OPREV_CAP; ++k) operator_revise_array[k] = -1;
-                      operator_revise_len = new_len;
-                  }
 
                   break;
 
@@ -9277,8 +8946,8 @@ havoc_stage:
     /* 同理，这里也拷贝一份，避免与 before 指针指向同一静态区导致的值被覆盖 */
     // u32 output_vector_after[OUTPUT_DIM_SIZE];
     // memcpy(output_vector_after, get_output_vector(), sizeof(output_vector_after));
-    double output_vector_after[OUTPUT_DIM_SIZE];
-     memcpy(output_vector_after, get_output_vector_log(), sizeof(output_vector_after));
+    // double output_vector_after[OUTPUT_DIM_SIZE];
+    //  memcpy(output_vector_after, get_output_vector_log(), sizeof(output_vector_after));
     // fprintf(fp_output,"output_vector_after ");
     // for(int j=0;j<OUTPUT_DIM_SIZE;j++){
     //   fprintf(fp_output,"%d ",output_vector_after[j]);
@@ -9306,42 +8975,69 @@ havoc_stage:
           stage_finds_per_score[i]=0.0; //每轮算子平均分数清零
       }
 
-      fprintf(fp1,"%d\n",posrev_len_view);//记录当前变异后文件长度
+      // fprintf(fp1,"%d\n",posrev_len_view);//记录当前变异后文件长度
       // if (posrev_len_view>max_position_revise_ever_case){
       // max_position_revise_ever_case=posrev_len_view;//更换最大的长度  
       // }
-      if (posrev_len_view> OPREV_CAP) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
-      // FATAL("max_position_revise_ever_case>10000! ");
-      //超过了就跳过这次执行
-      fprintf(fp_output,"goto havoc_stage;\n");
-      goto havoc_stage;
-      }
+      // if (posrev_len_view> OPREV_CAP) {//我们的默认数组是静态的，就开了10000，默认产生的种子长度不会超过这个长度，如果超过了就会退出
+      // // FATAL("max_position_revise_ever_case>10000! ");
+      // //超过了就跳过这次执行
+      // fprintf(fp_output,"goto havoc_stage;\n");
+      // goto havoc_stage;
+      // }
 
 
-      //我们记录算子操作矩阵不再限制有新路径的前提上，只要执行都算
-       for(int i=0;i<OUTPUT_DIM_SIZE;i++){
-            // fprintf(fp_output,"OUTPUT_DIM_SIZE\n ");
-            // fprintf(fp_output,"output_vector_before[i] %d ",output_vector_before[i]);
-            // fprintf(fp_output,"output_vector_after[i] %d ",output_vector_after[i]);
-          if(output_vector_before[i]!=output_vector_after[i]){//如果有一个不一样，说明操作前后输出向量发生变化,那么就记录
-            //记录输出向量
-            fprintf(fp_output,"output_vector_after ");
-            for(int j=0;j<OUTPUT_DIM_SIZE;j++){
-              // fprintf(fp_output,"%d ",output_vector_after[j]);
-              fprintf(fp_output,"%.2f ",output_vector_after[j]);
-            }
-            fprintf(fp_output,"\n");
-            //记录算子操作矩阵
-            fprintf(fp_output,"operator_revise_array ");
-            for (int j=0;j<operator_revise_len;j++){
-              // if(j%16==0) fprintf(fp_output,"\n ");
-              fprintf(fp_output,"%d ",operator_revise_array[j]);
+      // 我们记录算子操作矩阵不再限制有新路径的前提上，只要执行都算
+      //  for(int i=0;i<OUTPUT_DIM_SIZE;i++){
+      //       // fprintf(fp_output,"OUTPUT_DIM_SIZE\n ");
+      //       // fprintf(fp_output,"output_vector_before[i] %d ",output_vector_before[i]);
+      //       // fprintf(fp_output,"output_vector_after[i] %d ",output_vector_after[i]);
+      //     if(output_vector_before[i]!=output_vector_after[i]){//如果有一个不一样，说明操作前后输出向量发生变化,那么就记录
+      //       //记录输出向量
+      //       fprintf(fp_output,"output_vector_after ");
+      //       for(int j=0;j<OUTPUT_DIM_SIZE;j++){
+      //         // fprintf(fp_output,"%d ",output_vector_after[j]);
+      //         fprintf(fp_output,"%.2f ",output_vector_after[j]);
+      //       }
+      //       fprintf(fp_output,"\n");
+      //       //记录算子操作矩阵
+      //       fprintf(fp_output,"operator_revise_array ");
+      //       for (int j=0;j<operator_revise_len;j++){
+      //         // if(j%16==0) fprintf(fp_output,"\n ");
+      //         fprintf(fp_output,"%d ",operator_revise_array[j]);
+      //       }  
+      //       fprintf(fp_output,"\n");
+      //       fprintf(fp_output,"------------------\n");//使用这个来区分同一个case下的不同变异
+      //       break;
+      //   }
+      //  }
+
+          long long score_sub = (long long)prox_score_after - (long long)prox_score_before_before;  
+          // fprintf(fp_output,"prox_score_after %lld\n",prox_score_after);
+          // fprintf(fp_output,"prox_score_before_before %lld\n",prox_score_before_before);
+          if(score_sub>0){//我们记录分数不再限制有新路径的前提上，只要执行都算
+            //记录输出分数
+            fprintf(fp_output,"output_vector_after\n");
+            fprintf(fp_output,"%lld\n",score_sub);
+            //记录算子操作
+            fprintf(fp_output,"operator_revise_array\n");
+            for (int j=0;j<mutate_count;j++){
+              // if(j==0){
+              //   fprintf(fp_output,"%d %d %d",mutate_arr[j].method,mutate_arr[j].sites,mutate_arr[j].split_at);
+              // }else{
+                fprintf(fp_output,"%u %u",mutate_arr[j].method,mutate_arr[j].sites);
+              // }
+              fprintf(fp_output,"\n");
             }  
-            fprintf(fp_output,"\n");
             fprintf(fp_output,"------------------\n");//使用这个来区分同一个case下的不同变异
-            break;
-        }
-       }
+            //还原
+            mutate_count = 0;
+           for (size_t k = 0; k < mutate_count; ++k) {
+              mutate_arr[k].sites = UINT32_MAX; // 表示未设置
+              mutate_arr[k].del_num = 0;
+          }
+        } 
+
       
 
     //更新变异算子概率分布
@@ -9374,37 +9070,37 @@ havoc_stage:
                 }
               }
 
-              //累积所有>0的变异轮次中，各个位置的算子使用次数
-              for (int i=0;i<posrev_len_view;i++){
-                  if(position_revise[i]!=-1){//说明这个位置被变异过
-                      operator_usage_count_for_add[i][position_revise[i]]+=1;
-                  }
-              }
+              // //累积所有>0的变异轮次中，各个位置的算子使用次数
+              // for (int i=0;i<posrev_len_view;i++){
+              //     if(position_revise[i]!=-1){//说明这个位置被变异过
+              //         operator_usage_count_for_add[i][position_revise[i]]+=1;
+              //     }
+              // }
 
-              //累积所有>0的变异轮次中，各个位置的算子平均分数
-              for (int i=0;i<posrev_len_view;i++){
-                  if(position_revise[i]!=-1){//说明这个位置被变异过
-                      operator_usage_scores_for_add[i][position_revise[i]]+=stage_finds_per_score[position_revise[i]];
-                  }
-              }
+              // //累积所有>0的变异轮次中，各个位置的算子平均分数
+              // for (int i=0;i<posrev_len_view;i++){
+              //     if(position_revise[i]!=-1){//说明这个位置被变异过
+              //         operator_usage_scores_for_add[i][position_revise[i]]+=stage_finds_per_score[position_revise[i]];
+              //     }
+              // }
               
             }
-            else{//<0
-              fprintf(fp,"\nprox_score_after-prox_score_before<0\n");
-              //累积所有<0的变异轮次中，各个位置的算子使用次数
-              for (int i=0;i<posrev_len_view;i++){
-                  if(position_revise[i]!=-1){//说明这个位置被变异过
-                      operator_usage_count_for_sub[i][position_revise[i]]+=1;
-                  }
-              }
-              //累积所有<0的变异轮次中，各个位置的算子平均分数
-              for (int i=0;i<posrev_len_view;i++){
-                  if(position_revise[i]!=-1){//说明这个位置被变异过
-                      operator_usage_scores_for_sub[i][position_revise[i]]+=stage_finds_per_score[position_revise[i]];
-                  }
-              }
+            // else{//<0
+            //   fprintf(fp,"\nprox_score_after-prox_score_before<0\n");
+            //   //累积所有<0的变异轮次中，各个位置的算子使用次数
+            //   for (int i=0;i<posrev_len_view;i++){
+            //       if(position_revise[i]!=-1){//说明这个位置被变异过
+            //           operator_usage_count_for_sub[i][position_revise[i]]+=1;
+            //       }
+            //   }
+            //   //累积所有<0的变异轮次中，各个位置的算子平均分数
+            //   for (int i=0;i<posrev_len_view;i++){
+            //       if(position_revise[i]!=-1){//说明这个位置被变异过
+            //           operator_usage_scores_for_sub[i][position_revise[i]]+=stage_finds_per_score[position_revise[i]];
+            //       }
+            //   }
               
-            }     
+            // }     
        }
        fprintf(fp,"\n stage_finds_score:\n");
        for (int i=0;i<operator_num;i++){
@@ -9430,11 +9126,11 @@ havoc_stage:
        for (int i=0;i<operator_num;i++){
         	fprintf(fp,"%lf ",stage_finds_score_all[i]);
        }
-       fprintf(fp,"\n position_revise:\n");
-       for (int i=0;i<posrev_len_view;i++){
-          if(i%16==0) fprintf(fp,"\n ");
-        	fprintf(fp,"%d ",position_revise[i]);
-       }
+      //  fprintf(fp,"\n position_revise:\n");
+      //  for (int i=0;i<posrev_len_view;i++){
+      //     if(i%16==0) fprintf(fp,"\n ");
+      //   	fprintf(fp,"%d ",position_revise[i]);
+      //  }
         //这个打印得做一些优化，不然太大了
         //1. 如果一个位置某个算子从来没用过，就不打印
         //2. 
@@ -9477,7 +9173,7 @@ havoc_stage:
       }
   //这里是for循环结束 也就是一轮变异结束
   new_hit_cnt = queued_paths + unique_crashes;
-  
+
   time(&timer);
   long seconds = (long)timer;
 
