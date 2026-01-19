@@ -40,7 +40,7 @@ OP_EMBED_DIM = 10       # operator embedding dim: each operator has 10-dim embed
 HIDDEN_DIM = 128
 
 BATCH_SIZE = 64
-EPOCHS = 20
+EPOCHS =40 
 LEARNING_RATE = 1e-3
 
 
@@ -327,16 +327,16 @@ def train(model, dataloader, eval_contexts=None, eval_ops=None, eval_rewards=Non
                 epoch_rewards = np.array(epoch_rewards)
                 epoch_chosen_ops = np.array(epoch_chosen_ops)
                 
-                # Policy gradient related metrics (what we actually optimize)
-                # Compute log_probs for chosen actions
-                with torch.no_grad():
-                    # Convert to tensor for log_softmax
-                    scores_tensor = torch.from_numpy(epoch_predicted_scores).float().to(DEVICE)
-                    # For each sample, we need all scores to compute softmax
-                    # But we only have chosen scores, so we approximate by computing log_prob from score
-                    # Actually, we need to recompute from model to get proper log_probs
-                    # For now, use a simpler metric: average reward-weighted log_prob approximation
-                    avg_log_prob_weighted = np.mean(np.log(1e-6 + np.exp(epoch_predicted_scores - epoch_predicted_scores.max())) * epoch_rewards)
+                # # Policy gradient related metrics (what we actually optimize)
+                # # Compute log_probs for chosen actions
+                # with torch.no_grad():
+                #     # Convert to tensor for log_softmax
+                #     scores_tensor = torch.from_numpy(epoch_predicted_scores).float().to(DEVICE)
+                #     # For each sample, we need all scores to compute softmax
+                #     # But we only have chosen scores, so we approximate by computing log_prob from score
+                #     # Actually, we need to recompute from model to get proper log_probs
+                #     # For now, use a simpler metric: average reward-weighted log_prob approximation
+                #     avg_log_prob_weighted = np.mean(np.log(1e-6 + np.exp(epoch_predicted_scores - epoch_predicted_scores.max())) * epoch_rewards)
                 
                 # MSE and correlation (for reference, but not what we optimize)
                 correlation = np.corrcoef(epoch_predicted_scores, epoch_rewards)[0, 1]
@@ -701,6 +701,83 @@ def run(args):
     results_path = os.path.join(args.out_dir, "prediction_results.npz")
     np.savez(results_path, **results)
     print(f"✓ Saved prediction results to: {results_path}")
+    
+    # =====================
+    # 4. Model Recommendation Demo
+    # =====================
+    print("\n" + "=" * 60)
+    print("Model Recommendation Demo")
+    print("=" * 60)
+    
+    # Use model to predict on some sample contexts
+    model.eval()
+    with torch.no_grad():
+        # Get a few sample contexts from the dataset
+        sample_indices = np.random.choice(len(contexts), min(5, len(contexts)), replace=False)
+        sample_contexts = contexts[sample_indices]
+        sample_contexts_tensor = torch.from_numpy(sample_contexts).float().to(DEVICE)
+        
+        # Get model predictions
+        all_scores = model(sample_contexts_tensor)  # [B, num_ops]
+        probs = torch.softmax(all_scores, dim=1)  # [B, num_ops] - probability distribution
+        
+        print("\nSample recommendations (using trained model):")
+        print("-" * 80)
+        for i, idx in enumerate(sample_indices):
+            scores = all_scores[i].cpu().numpy()  # [num_ops]
+            prob_dist = probs[i].cpu().numpy()  # [num_ops]
+            
+            # Get recommended operator (highest probability)
+            recommended_op = np.argmax(prob_dist)
+            recommended_prob = prob_dist[recommended_op]
+            recommended_score = scores[recommended_op]
+            
+            print(f"\nSample {i+1} (context index {idx}):")
+            print(f"  Recommended operator: {recommended_op} (probability: {recommended_prob:.4f}, score: {recommended_score:.4f})")
+            
+            # Show top 3 operators
+            top3_indices = np.argsort(prob_dist)[-3:][::-1]
+            print(f"  Top 3 operators:")
+            for rank, op_id in enumerate(top3_indices, 1):
+                print(f"    {rank}. Operator {op_id:2d}: prob={prob_dist[op_id]:.4f}, score={scores[op_id]:.4f}")
+    
+    # Overall recommendation statistics
+    print("\n" + "-" * 60)
+    print("Overall Model Recommendation Statistics:")
+    print("-" * 60)
+    
+    # Predict on all contexts (or a large sample)
+    model.eval()
+    with torch.no_grad():
+        # Use a subset for efficiency
+        eval_size = min(1000, len(contexts))
+        eval_indices = np.random.choice(len(contexts), eval_size, replace=False)
+        eval_contexts = contexts[eval_indices]
+        eval_contexts_tensor = torch.from_numpy(eval_contexts).float().to(DEVICE)
+        
+        all_scores = model(eval_contexts_tensor)  # [eval_size, num_ops]
+        probs = torch.softmax(all_scores, dim=1)  # [eval_size, num_ops]
+        
+        # Count how many times each operator is recommended
+        recommended_ops = torch.argmax(probs, dim=1).cpu().numpy()  # [eval_size]
+        recommendation_counts = np.bincount(recommended_ops, minlength=NUM_OPERATORS)
+        recommendation_rates = recommendation_counts / eval_size * 100
+        
+        print(f"\nModel recommendation frequency (based on {eval_size} random contexts):")
+        print(f"{'Op':<4} {'Recommendation Rate':<20} {'Count':<10}")
+        print("-" * 40)
+        for op_id in range(NUM_OPERATORS):
+            print(f"{op_id:<4} {recommendation_rates[op_id]:<20.2f}% {recommendation_counts[op_id]:<10}")
+        
+        # Compare with actual best operators
+        print(f"\nComparison with actual best operators (by avg reward):")
+        print(f"{'Op':<4} {'Model Rec Rate':<18} {'Actual Avg Reward':<18} {'Match?':<10}")
+        print("-" * 55)
+        for op_id in range(NUM_OPERATORS):
+            mask = chosen_ops == op_id
+            actual_avg_reward = true_rewards[mask].mean() if mask.sum() > 0 else 0.0
+            match = "✓" if recommendation_rates[op_id] > 5.0 and actual_avg_reward > 2.0 else "✗"
+            print(f"{op_id:<4} {recommendation_rates[op_id]:<18.2f}% {actual_avg_reward:<18.4f} {match:<10}")
     
     print("\n" + "=" * 60)
     print("All results saved successfully!")

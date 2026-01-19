@@ -1,0 +1,84 @@
+Parsed 396875 operator-reward pairs from /cma-log/output_for_ana.txt
+OperatorPolicyNet(
+  (op_embedding): Embedding(15, 10)
+  (net): Sequential(
+    (0): Linear(in_features=20, out_features=128, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=128, out_features=128, bias=True)
+    (3): ReLU()
+    (4): Linear(in_features=128, out_features=1, bias=True)
+  )
+)
+
+============================================================
+Training started...
+============================================================
+[Epoch 0] loss = 5.570669
+  Policy metric (logp*reward): 0.9058, MSE=71.7403, Correlation=0.0828
+[Epoch 1] loss = 5.545083
+[Epoch 2] loss = 5.539605
+  Policy metric (logp*reward): 0.9065, MSE=69.8065, Correlation=0.0858
+[Epoch 3] loss = 5.535638
+[Epoch 4] loss = 5.529865
+  Policy metric (logp*reward): 1.0036, MSE=69.3589, Correlation=0.0949
+[Epoch 5] loss = 5.527246
+[Epoch 6] loss = 5.524884
+  Policy metric (logp*reward): 0.9514, MSE=71.2411, Correlation=0.0884
+[Epoch 7] loss = 5.520003
+[Epoch 8] loss = 5.516866
+  Policy metric (logp*reward): 0.9526, MSE=69.5057, Correlation=0.0896
+[Epoch 9] loss = 5.515512
+[Epoch 10] loss = 5.511307
+  Policy metric (logp*reward): 0.9076, MSE=71.8659, Correlation=0.0834
+[Epoch 11] loss = 5.507146
+[Epoch 12] loss = 5.503074
+  Policy metric (logp*reward): 0.9390, MSE=69.1690, Correlation=0.0877
+[Epoch 13] loss = 5.497545
+[Epoch 14] loss = 5.491977
+  Policy metric (logp*reward): 0.9567, MSE=68.5850, Correlation=0.0889
+[Epoch 15] loss = 5.488868
+[Epoch 16] loss = 5.481236
+  Policy metric (logp*reward): 1.0675, MSE=68.9089, Correlation=0.0981
+[Epoch 17] loss = 5.479289
+[Epoch 18] loss = 5.471558
+  Policy metric (logp*reward): 0.9492, MSE=66.6270, Correlation=0.0883
+[Epoch 19] loss = 5.462859
+[Epoch 20] loss = 5.460468
+  Policy metric (logp*reward): 1.0215, MSE=70.3097, Correlation=0.0922
+[Epoch 21] loss = 5.452541
+[Epoch 22] loss = 5.446463
+  Policy metric (logp*reward): 1.0099, MSE=69.8588, Correlation=0.0906
+[Epoch 23] loss = 5.438959
+[Epoch 24] loss = 5.435989
+  Policy metric (logp*reward): 1.0809, MSE=70.1541, Correlation=0.0963
+[Epoch 25] loss = 5.427144
+[Epoch 26] loss = 5.421214
+  Policy metric (logp*reward): 1.1095, MSE=71.6640, Correlation=0.0968
+[Epoch 27] loss = 5.417985
+[Epoch 28] loss = 5.408045
+  Policy metric (logp*reward): 1.1811, MSE=72.8446, Correlation=0.1018
+[Epoch 29] loss = 5.403169
+[Epoch 30] loss = 5.396528
+  Policy metric (logp*reward): 1.1771, MSE=68.9870, Correlation=0.1040
+[Epoch 31] loss = 5.392194
+[Epoch 32] loss = 5.384566
+  Policy metric (logp*reward): 1.1937, MSE=72.0896, Correlation=0.1034
+[Epoch 33] loss = 5.377623
+[Epoch 34] loss = 5.370275
+  Policy metric (logp*reward): 1.2242, MSE=69.5208, Correlation=0.1067
+[Epoch 35] loss = 5.364437
+[Epoch 36] loss = 5.362040
+  Policy metric (logp*reward): 1.2216, MSE=71.3985, Correlation=0.1042
+[Epoch 37] loss = 5.353201
+[Epoch 38] loss = 5.348279
+  Policy metric (logp*reward): 1.2020, MSE=70.2302, Correlation=0.1031
+[Epoch 39] loss = 5.342332
+  Policy metric (logp*reward): 1.2616, MSE=71.0375, Correlation=0.1071
+
+============================================================
+Training completed. Generating results...
+============================================================
+
+------------------------------------------------------------
+Operator Embeddings Analysis
+------------------------------------------------------------

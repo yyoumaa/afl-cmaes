@@ -1,7 +1,0 @@
-[*] Checking for the ability to compile x86 code...
-
-Oops, looks like your compiler can't generate x86 code.
-
-Don't panic! You can use the LLVM or QEMU mode, but see docs/INSTALL first.
-(To ignore this error, set AFL_NO_X86=1 and try again.)
-

@@ -8405,7 +8405,7 @@ havoc_stage:
         mutate_arr[k].del_num = 0;
     }
 
-   if(queued_paths>20) if_use_nn_select=1;
+   if(queued_paths>200000) if_use_nn_select=1;//暂时关闭这个
     
    for (i = 0; i < use_stacking; i++) {
     int flagforpos=0;
@@ -8526,7 +8526,7 @@ havoc_stage:
               temp_len_puppet = flagforpos ? mutate_arr[i].sites : UR((temp_len << 3) - 1);
 							FLIP_BIT(out_buf, temp_len_puppet);
 							FLIP_BIT(out_buf, temp_len_puppet + 1);
-           mutate_arr[i].sites =temp_len_puppet;
+              mutate_arr[i].sites =temp_len_puppet;
 							stage_finds_times[1] += 1;
 
 							break;
@@ -9025,9 +9025,12 @@ havoc_stage:
               // if(j==0){
               //   fprintf(fp_output,"%d %d %d",mutate_arr[j].method,mutate_arr[j].sites,mutate_arr[j].split_at);
               // }else{
-                fprintf(fp_output,"%u %u",mutate_arr[j].method,mutate_arr[j].sites);
+                if(mutate_arr[j].sites!=4294967295) 
+                {
+                  fprintf(fp_output,"%u %u",mutate_arr[j].method,mutate_arr[j].sites);
+                  fprintf(fp_output,"\n");
+                }
               // }
-              fprintf(fp_output,"\n");
             }  
             fprintf(fp_output,"------------------\n");//使用这个来区分同一个case下的不同变异
             //还原
