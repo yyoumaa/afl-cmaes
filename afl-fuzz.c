@@ -8405,101 +8405,109 @@ havoc_stage:
         mutate_arr[k].del_num = 0;
     }
 
-   if(queued_paths>200000) if_use_nn_select=1;//暂时关闭这个
+  //  if(queued_paths>200000) if_use_nn_select=1;//暂时关闭这个
+  //  if_use_nn_select=0;
     
    for (i = 0; i < use_stacking; i++) {
     int flagforpos=0;
 
-    if(if_use_nn_select){
-      if(UR(2)){//50%概率使用nn选择
-        u32 method_nn = 0;
-        u32 pos_nn = 0;
-        select_algorithm_nn(&method_nn, &pos_nn, (u32)temp_len, (u32)operator_num);
-        mutate_arr[i].method = method_nn;
-        mutate_arr[i].sites  = pos_nn;
-        flagforpos=1;
-        if (mutate_fp) {
-          fprintf(mutate_fp, "NN-select: idx=%u method=%u pos=%u\n", i, method_nn, pos_nn);
-        }
-      }else{
-        mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
-        if (mutate_fp) {
-          fprintf(mutate_fp, "NN-off random method: idx=%u method=%u\n", i, mutate_arr[i].method);
-        }
-      } 
-    }else {
+  //   if(if_use_nn_select){
+  //     if(UR(2)){//50%概率使用nn选择
+  //       u32 method_nn = 0;
+  //       u32 pos_nn = 0;
+  //       select_algorithm_nn(&method_nn, &pos_nn, (u32)temp_len, (u32)operator_num);
+  //       mutate_arr[i].method = method_nn;
+  //       mutate_arr[i].sites  = pos_nn;
+  //       flagforpos=1;
+  //       if (mutate_fp) {
+  //         fprintf(mutate_fp, "NN-select: idx=%u method=%u pos=%u\n", i, method_nn, pos_nn);
+  //       }
+  //     }else{
+  //       mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+  //       if (mutate_fp) {
+  //         fprintf(mutate_fp, "NN-off random method: idx=%u method=%u\n", i, mutate_arr[i].method);
+  //       }
+  //     } 
+  //   }else {
+  //     mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+  //   }
+  //      if (flagforpos) {
+
+  //       u32 pos = mutate_arr[i].sites;
+  //       int invalid = 0;
+
+  //       switch (mutate_arr[i].method) {
+
+  //         case 0: /* bit flip */
+  //           if (pos >= temp_len) invalid = 1;
+  //           break;
+
+  //         case 1:
+  //           if ((pos << 3) + 1 >= (temp_len << 3)) invalid = 1;
+  //           break;
+
+  //         case 2:
+  //           if ((pos << 3) + 3 >= (temp_len << 3)) invalid = 1;
+  //           break;
+
+  //         case 3:
+  //         case 6:
+  //         case 9:
+  //         case 12:
+  //           if (pos >= temp_len) invalid = 1;
+  //           break;
+
+  //         case 4:
+  //         case 7:
+  //         case 10:
+  //           if (pos + 1 >= temp_len) invalid = 1;
+  //           break;
+
+  //         case 5:
+  //         case 8:
+  //         case 11:
+  //           if (pos + 3 >= temp_len) invalid = 1;
+  //           break;
+
+  //         case 13: /* delete */
+  //           if (pos >= temp_len - 1) invalid = 1;
+  //           break;
+
+  //         case 14: /* clone insert */
+  //         case 17: /* insert extra */
+  //           if (pos > temp_len) invalid = 1;
+  //           break;
+
+  //         case 15: /* overwrite */
+  //           if (pos >= temp_len) invalid = 1;
+  //           break;
+
+  //         case 16: /* overwrite extra */
+  //           if (pos >= temp_len) invalid = 1;
+  //           break;
+
+  //         default:
+  //           invalid = 1;
+  //           break;
+  //       }
+
+  //       if (invalid) {
+  //         flagforpos = 0;   // 🚨 回退到随机
+  //         if (mutate_fp) {
+  //           fprintf(mutate_fp,
+  //             "NN-pos invalid: idx=%u method=%u pos=%u temp_len=%u -> fallback\n",
+  //             i, mutate_arr[i].method, pos, temp_len);
+  //         }
+  //       }
+  //     }
+
       mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
-    }
-       if (flagforpos) {
-
-        u32 pos = mutate_arr[i].sites;
-        int invalid = 0;
-
-        switch (mutate_arr[i].method) {
-
-          case 0: /* bit flip */
-            if (pos >= temp_len) invalid = 1;
-            break;
-
-          case 1:
-            if ((pos << 3) + 1 >= (temp_len << 3)) invalid = 1;
-            break;
-
-          case 2:
-            if ((pos << 3) + 3 >= (temp_len << 3)) invalid = 1;
-            break;
-
-          case 3:
-          case 6:
-          case 9:
-          case 12:
-            if (pos >= temp_len) invalid = 1;
-            break;
-
-          case 4:
-          case 7:
-          case 10:
-            if (pos + 1 >= temp_len) invalid = 1;
-            break;
-
-          case 5:
-          case 8:
-          case 11:
-            if (pos + 3 >= temp_len) invalid = 1;
-            break;
-
-          case 13: /* delete */
-            if (pos >= temp_len - 1) invalid = 1;
-            break;
-
-          case 14: /* clone insert */
-          case 17: /* insert extra */
-            if (pos > temp_len) invalid = 1;
-            break;
-
-          case 15: /* overwrite */
-            if (pos >= temp_len) invalid = 1;
-            break;
-
-          case 16: /* overwrite extra */
-            if (pos >= temp_len) invalid = 1;
-            break;
-
-          default:
-            invalid = 1;
-            break;
-        }
-
-        if (invalid) {
-          flagforpos = 0;   // 🚨 回退到随机
-          if (mutate_fp) {
-            fprintf(mutate_fp,
-              "NN-pos invalid: idx=%u method=%u pos=%u temp_len=%u -> fallback\n",
-              i, mutate_arr[i].method, pos, temp_len);
-          }
-        }
-      }
-
+      // 添加统计
+      // static u32 op_count[18] = {0};
+      // op_count[mutate_arr[i].method]++;
+      // if (op_count[mutate_arr[i].method] % 1000 == 0) {
+      //     fprintf(stderr, "Op %d count: %u\n", mutate_arr[i].method, op_count[mutate_arr[i].method]);
+      // }
       switch (mutate_arr[i].method) {
       //这里注释哪行选择启用不启用cma-es算法选择算子
       // switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
