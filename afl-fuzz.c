@@ -11155,6 +11155,9 @@ int main(int argc, char** argv) {
     current_entry = queue_cur->entry_id;
 
     skipped_fuzz = fuzz_one(use_argv);
+    fprintf(stderr, "entry=%u skipped=%u favored=%u pending_fav=%u\n",
+      current_entry, skipped_fuzz, queue_cur->favored, pending_favored);
+
 
     if (!stop_soon && sync_id && !skipped_fuzz) {
 
