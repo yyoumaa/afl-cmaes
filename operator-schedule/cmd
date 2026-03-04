@@ -1,0 +1,24 @@
+实验记录
+3.1
+python3 main.py --data_file output_for_ana.txt --output_file outputfile >log   
+用上 有效果 什么叫有效果 只要不倒退就好 我挑一些好的数据就好了 但是要有一些case study典型的拉高的才行
+用上greedy eplison=0.1的时候日志如log-greedy所示
+
+我觉得要不没ground truth 的话 我可以不可以这样干 就在原有的基础上 一点点改动 只要不引起剧烈的下降 就算有提升 因为可以挑出这样的数据
+
+我怎么得到状态好坏的评价标准呢 ground truth 要不就各自试试 看能否有加速效果吗 claude建议就是看score就好 不用管poc的复现速度
+我这样心里有底多了因为可以只看score的变化就好
+
+把全局指标设计好 写好代码 和正确的数据一起跑一晚上得到 
+
+但要注意第二阶段的 reward
+###要能回传影响第一阶段的判断。否则第一阶段可能选了一个"平均还行但在当前位置不好"的族。
+3.2
+我们需要记录的是fp_output文件 之后需要和dafl对比一下把无用代码去掉
+
+3.3
+在线模式的使用方式：
+python3 main.py --data_file dummy --output_file dummy --online greedy --batch_size 100
+python3 main.py --data_file dummy --output_file dummy --online ucb --batch_size 100
+
+python3 main.py --data_file /two-stage/afl_to_python.txt --output_file outputfile >log

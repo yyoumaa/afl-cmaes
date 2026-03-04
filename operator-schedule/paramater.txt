@@ -1,0 +1,6 @@
+epsilon=0.1
+c：探索系数，控制探索力度，一般取 1.0~2.0
+c=1.0
+alpha = 1.0：探索强度，越大越倾向探索未知上下文
+TARGET_DISTANCE = 190.0  # 到达目标点的总距离（后续根据实际情况修改）
+REWARD_WINDOW_SIZE = 20  # reward momentum 计算的滑动窗口大小

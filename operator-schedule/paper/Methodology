@@ -1,0 +1,119 @@
+Methodology
+要对应到挑战，可以先设计方法，最后凝练挑战
+最好是两阶段，已经是两阶段了
+要有泛化性
+
+两阶段：
+1. 全局语义状态
+现在更该做哪类改变
+
+1) Step 1：先选“算子族”（Operator Family / Mutation Mode）
+1.1 把 16 个算子分成 4~6 个“族”，先输出更粗的“策略模式”。这会让学习更稳定、样本需求更小。
+
+为了让策略更可学、更可解释，更有助于我们学习到想要的语义和结构上的改变。我们根据算子对测试用例在语义和结构上的贡献，将算子分为表1所示的6类。其中，数值调整型（Numeric Adjustment）改变已有字段的“数值意义”，但不改变结构。目标是触发阈值判断、长度匹配、枚举匹配、边界溢出，这类算子主要用于：constraint solving / threshold crossing；位级/噪声扰动型（Noise / Micro Perturbation）产生局部扰动，但没有明确语义方向，非结构性微扰，用于局部 fuzz、trigger magic bits、打破 checksum / flag；结构破坏型（Structural Modification）可以改变长度或结构边界，从而改变语法结构，用于打破 parser、改变 loop 次数、越界；局部块复制/扩展型（Block Duplication / Local Reuse）会重复已有片段，可以利用程序种子自身的重复性，从而利用重复结构，重复 record，或者是触发二次处理；块重组型（Chunk Overwrite / Recombinant）使用已有 chunk 覆盖或插入，用于局部语义替换、结构块移动、类 splice 但局部，用于局部重组；split可以把一个连续结构拆成两个语义块，改变“结构分段方式”，因此单独分为结构重构型（Structural Re-segmentation）。
+
+表1  算子的特点和分类
+Operator id	Description	数值调整型（Numeric Adjustment）
+	位级/噪声扰动型（Noise / Micro Perturbation）
+	结构破坏型（Structural Modification）
+	局部块复制/扩展型（Block Duplication / Local Reuse）
+	块重组型（Chunk Overwrite / Recombinant）
+	结构重构型（Structural Re-segmentation）
+0	Flip single bit		✅				
+1	Set byte to interesting value	✅					
+2	 Set word to interesting value	✅					
+3	Set dword to interesting value	✅					
+4	Randomly subtract from byte	✅					
+5	Randomly add to byte	✅					
+6	Randomly subtract from word	✅	 				
+7	Randomly add to word	✅					
+8	Randomly subtract from dword	✅					
+9	Randomly add to dword	✅					
+10	set a random byte to a random value		✅				
+11	Delete Bytes			✅			
+12	Delete Bytes			✅			
+13	Clone bytes (75%) or insert a block of constant bytes (25%)				✅		
+14	Overwrite bytes with a randomly selected chunk (75%) or
+fixed bytes (25%)					✅	
+15	Overwrite bytes with an extra					✅	
+16	Insert an extra			✅			
+17	splice						✅
+
+1.2 使用bandit来选择算子族
+
+考虑两个主要因素，fuzzing进行的阶段（时间上的累计状态）以及reward的反馈情况（时间上的delta）（这两类可以）
+1.先拼特征，再用简单encoder
+2.先用简单的多臂老虎机，再换成policy等试一试有什么不同
+ 
+（不能退化成启发规则，学出来一些共性规律可以）
+
+1.实现大致框架，想好怎么实现各个部分，后续在这个框架上调整就好
+2.有一些数据
+
+数据文件要重新得到，目前的用的是以前算子得到的
+别忘了我们在dafl上直接改的，power schedule可能有点问题，真正的afl可能也会转换很多case 所以一定要可迁移 不然解释不过去，或者每个case用很短的执行就可以修正SMR也没问题
+
+
+状态：全局 context 向量 c（不含具体位置）
+动作：选择一个族 
+回报：这次执行得到的 reward
+
+
+
+Target Progress （离目标还有多远、进度在什么阶段）
+dom-progress level（当前种子的 dominator 进度）
+distance-to-target proxy（离目标的“差几层”）
+distance-to-target proxy（离目标的“差几层”）
+这组能让 bandit 自动学出：
+早期更偏“结构/重组”，中后期更偏“数值/算术”。
+
+Frontier Signal  
+plateau indicator（停滞强度）
+reward sparsity / burstiness（DGF 奖励非常稀疏）
+frontier novelty rate（边界新颖度）
+这组告诉模型：
+“现在奖励是否稀疏、是不是在等待大跃迁”，从而影响探索/利用。
+
+考虑fuzzing 进度阶段
+reward 分布
+稀疏度
+features → Encoder → z
+(z, op_family) → reward_hat
+
+（context，op-family，reward）
+
+还要设计全局的reward  不同于后续的局部reward
+阶段1（全局语义状态）想学的是“在当前 fuzzing 宏观阶段/进展下，应该偏好哪类算子族”，它需要的是稳、低噪声、可比较的回报信号。
+阶段2（局部语义结构 / SMR）想学的是“在某类局部结构区域里，用什么算子+什么参数最管用”，它需要的是细粒度、强归因的回报信号。
+
+---------------------------------------------------------------------------------------------
+
+Context
+
+fuzzing 进度阶段
+reward 分布
+探索 vs 利用
+稀疏度
+
+We categorize mutation operators based on their semantic effects on program structure and value domains rather than their low-level implementation details.
+回答：
+
+现在需要什么类型的变化？
+例如：
+结构扩展？
+数值微调？
+跨 seed 重组？
+重复片段？
+增加嵌套？
+这一层决定：
+算子类型族（family）
+embedding 并不是“更神奇”。
+它的作用是：
+更容易表达阶段切换
+更容易迁移到新 case
+更容易泛化到不同程序
+
+--------------------------------------------------------------------------------
+
+2.局部语义区域
+在哪个区域做这类改变最划算（region selection+进一步精确算子+参数记忆）
