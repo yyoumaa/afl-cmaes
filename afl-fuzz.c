@@ -6575,7 +6575,16 @@ havoc_stage:
 
     for (i = 0; i < use_stacking; i++) {
 
-      mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+      // mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
+      u32 limit = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
+      u32 random[2]={13,14};
+      if (UR(100) < 20) {             // 30% 概率偏向 1~9
+          // mutate_arr[i].method = 1 + UR(9);
+          int index = UR(2);
+          mutate_arr[i].method=random[index];
+      } else {                        // 70% 正常随机
+          mutate_arr[i].method = UR(limit);
+      }
 
       switch (mutate_arr[i].method) {
         case 0:
