@@ -73,7 +73,10 @@
 #include "cmaes_interface.h"
 #include <assert.h>
 
+#include <semaphore.h>
+
 FILE *mutate_fp = NULL;
+FILE *mutate_fp_log = NULL;
 
 typedef struct {
     u32 method;//变异的case方法
@@ -87,6 +90,58 @@ Mutate_arr mutate_arr[256] = {0};
 
 u32 mutate_count = 0;
 int if_use_nn_select=0;//是否使用神经网络选择算子
+int turn_on_bandit=1;
+
+int target_region;
+int target_family;
+int target_family_to_op[5][9] = {
+  {1, 2, 3, 4, 5, 6, 7, 8, 9},
+  {0, 10, -1, -1, -1, -1, -1, -1, -1},
+  {11, 12, -1, -1, -1, -1, -1, -1, -1},
+  {13, -1, -1, -1, -1, -1, -1, -1, -1},
+  {14, -1, -1, -1, -1, -1, -1, -1, -1}
+};
+int len_for_target[]={9,2,2,1,1};
+
+// 对应 Python 端 528 字节特征 + 8 字节 Reward
+struct __attribute__((packed)) afl_bandit_shm {
+  double global_ctx[3];
+  double regions_ctx[16][4];
+  double batch_max_reward;
+};
+
+// 对应 Python 端的 struct.pack('<ii', ...)
+struct afl_bandit_decision {
+  int chosen_region;
+  int chosen_family;
+};
+
+ // 创建并打开共享内存
+ int fd_c2py;
+ int fd_py2c;
+
+ // 映射内存
+ struct afl_bandit_shm *c2py_mem;
+ struct afl_bandit_decision *py2c_mem;
+
+ // 信号量 
+ sem_t *sem_c_feat;
+ sem_t *sem_c_batch;
+ sem_t *sem_py_dec;
+
+ double calc_feat_static_progress(u64 cur_score);
+ double calc_feat_dynamic_status(u64 cur_score);
+ double calc_feat_reward_feedback(void);
+ double calculate_seed_entropy(u8* buf, u32 len);
+
+ static double reward_ema = 0.0; // 指数移动平均
+ static const double alpha_ema = 0.05; // 0.1 代表“平滑窗口”大约是 10 次
+
+
+ /* 全局最大数据流得分，用于特征归一化 */
+ static u64 static_target_score = 1;   // 环境变量传进来的“终点”分数
+ static u64 dynamic_seen_max_score = 1; // 运行中见过的最大分数
+ static double last_ten_batches_avg_reward = 0.0; // Reward 反馈特征
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -5382,6 +5437,115 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 }
 
+/* 根据 bandit 决定的 region，在指定范围内生成随机位置 */
+static inline u32 get_bandit_pos(u32 total_len, u32 region_idx, u32 item_size) {
+  u32 r_start = (total_len / 16) * region_idx;
+  u32 r_len   = total_len / 16;
+  
+  // 如果剩下的长度不足以放下操作对象（如 4 字节的 dword），则退化到全范围随机或截断
+  if (r_len <= item_size) return UR(total_len - item_size + 1);
+
+  // 在 region 内部产生偏移，注意不要越过 region 边界
+  return r_start + UR(r_len - item_size + 1);
+}
+
+// 在每次计算完 batch_max_reward 后调用
+void update_reward_signal(double current_reward) {
+
+    // EMA 公式：新值占 10%，旧记忆占 90%
+    reward_ema = (alpha_ema * current_reward) + (1.0 - alpha_ema) * reward_ema;
+}
+
+// 特征 1：静态进度（绝对位置）
+double calc_feat_static_progress(u64 cur_score) {
+  double res = (double)cur_score / (double)static_target_score;
+  return res > 1.0 ? 1.0 : res;
+}
+
+// 特征 2：动态地位（相对突破）
+double calc_feat_dynamic_status(u64 cur_score) {
+  if (cur_score > dynamic_seen_max_score) dynamic_seen_max_score = cur_score;
+  return (double)cur_score / (double)dynamic_seen_max_score;
+}
+
+// 特征 3：近期收益率（反馈平稳度）
+double calc_feat_reward_feedback(void) {
+  /* 把原始的 EMA 分数映射到 0~1 之间。
+     这里用 static_target_score 作为一个基准。
+     注意：单次变异很难达到总分的 100%，所以我们可以给它一个缩放系数，
+     比如我们认为单次 Batch 能提升总分的 1% 就是“巨大的收益”了。
+  */
+  double normalized_ema = reward_ema / (static_target_score * 0.01);
+
+  // 边界保护
+  if (normalized_ema > 1.0) normalized_ema = 1.0;
+  if (normalized_ema < 0.0) normalized_ema = 0.0;
+
+  return normalized_ema;
+}
+
+/* 预计算的查找表：存储 i * log2(i)，i 从 0 到 65536 (足够覆盖一般区域大小) 
+   如果你的 region 很大，可以动态算。这里我们用标准数学库实时算，但通过单次循环优化速度。 */
+
+  double calculate_seed_entropy(u8* buf, u32 len) {
+  if (len == 0) return 0.0;
+
+  u32 counts[256] = {0};
+  u32 unique_chars = 0;
+
+  /* 1. 统计每个字节出现的频次 */
+  for (u32 i = 0; i < len; i++) {
+    if (counts[buf[i]] == 0) unique_chars++;
+    counts[buf[i]]++;
+  }
+
+  /* 如果整个区域全是同一个字符（比如一堆 0x00），熵为 0 */
+  if (unique_chars <= 1) return 0.0;
+
+  double entropy = 0.0;
+  double len_d = (double)len;
+
+  /* 2. 计算香农熵 - \sum P_i * log2(P_i) */
+  for (int i = 0; i < 256; i++) {
+    if (counts[i] > 0) {
+      double p = (double)counts[i] / len_d;
+      entropy -= p * log2(p); // 这里的 log2 是 C 标准库 math.h 里的，非常快
+    }
+  }
+
+  /* 3. 归一化到 0.0 ~ 1.0 (除以最大可能的熵 8.0 bits) */
+  entropy /= 8.0;
+
+  if (entropy > 1.0) entropy = 1.0;
+  if (entropy < 0.0) entropy = 0.0;
+
+  return entropy;
+}
+
+double calculate_printable_ratio(u8* buf, u32 len) {
+  if (len == 0) return 0.0;
+
+  u32 printable_count = 0;
+
+  for (u32 i = 0; i < len; i++) {
+    /* 标准 ASCII 可见字符范围是 32 (空格) 到 126 (~) 
+       加上常用的回车 \n (10) 和 换行 \r (13) 以及 制表符 \t (9) */
+    u8 c = buf[i];
+    if ((c >= 32 && c <= 126) || c == 10 || c == 13 || c == 9) {
+      printable_count++;
+    }
+  }
+
+  return (double)printable_count / (double)len;
+}
+
+double calculate_history_reward(u8* buf, u32 len) {
+  return 0.5;
+}
+double calculate_history_coverage(u8* buf, u32 len) {
+  return 0.5;
+}
+
 
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
@@ -6560,6 +6724,45 @@ havoc_stage:
   common_fuzz_stuff(argv, out_buf, temp_len);
   u64 prox_score_before_before = compute_proximity_score();
 
+  if (turn_on_bandit==1){ //开启bandit选择的时候
+    //计算此时全局特征
+    c2py_mem->global_ctx[0]=calc_feat_static_progress(prox_score_before_before);
+    c2py_mem->global_ctx[1]=calc_feat_dynamic_status(prox_score_before_before);
+    c2py_mem->global_ctx[2]=calc_feat_reward_feedback();
+    //计算当前变异种子特征
+    u32 region_len = temp_len / 16;
+    if (region_len == 0) region_len = 1; // 防止除零
+    
+    for(int i = 0; i < 16; i++) {
+      u32 offset = i * region_len;
+      
+      // 如果超出了文件实际长度，就不要继续算了，直接填充 0
+      if (offset >= temp_len) {
+        c2py_mem->regions_ctx[i][0] = 0.0;
+        // 其他子特征也填 0.0
+        continue;
+      }
+    
+      // 最后一个区块把剩下的所有字节都吃掉，防止丢掉尾部数据
+      u32 current_len = (i == 15) ? (temp_len - offset) : region_len;
+      u8* region_ptr = out_buf + offset;
+      c2py_mem->regions_ctx[i][0] = calculate_seed_entropy(region_ptr, region_len);     // 熵
+      c2py_mem->regions_ctx[i][1] = calculate_printable_ratio(region_ptr, region_len);     // 可见字符比例
+      c2py_mem->regions_ctx[i][2] = calculate_history_reward(region_ptr, region_len);    // 历史 reward
+      c2py_mem->regions_ctx[i][3] = calculate_history_coverage(region_ptr, region_len);    // 历史覆盖率
+    }
+
+    // 通知 Python 特征已准备好
+    sem_post(sem_c_feat);
+    fprintf(mutate_fp_log,"[C Mock] 2. 等待 Python 决策...\n");
+    sem_wait(sem_py_dec);
+    // 读取决策
+    target_region = py2c_mem->chosen_region;
+    target_family = py2c_mem->chosen_family;
+   fprintf(mutate_fp_log,"[C Mock] 3. 收到决策 -> 变异区域: %d, 算子族: %d\n", target_region, target_family);
+  }
+  
+
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
@@ -6572,25 +6775,57 @@ havoc_stage:
         mutate_arr[k].sites = UINT32_MAX; // 表示未设置
         mutate_arr[k].del_num = 0;
     }
+    int len_for_target_index=0;
+    if (turn_on_bandit){
+        use_stacking=256; //如果开启了选择，那么就用决策执行固定次数，这样公平一点
+          // 安全检查 1：确保 family 没越界 (0-4)
+        if (target_family < 0 || target_family > 4) {
+          target_family = 0; // 越界就回退到 Family 0
+        }
+        len_for_target_index=len_for_target[target_family];
+         // 安全检查 2：确保 UR 的参数至少为 1
+        if (len_for_target_index <= 0) {
+          len_for_target_index = 1; // 至少选 family 里的第 0 个算子
+        }
+    }
+  
+    fprintf(mutate_fp_log,"[C Mock] 4. 执行 256 次定向变异...\n");
+    double max_score_sub=0.0;
 
     for (i = 0; i < use_stacking; i++) {
 
       // mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
-      u32 limit = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
-      u32 random[2]={13,14};
-      if (UR(100) < 20) {             // 30% 概率偏向 1~9
-          // mutate_arr[i].method = 1 + UR(9);
-          int index = UR(2);
-          mutate_arr[i].method=random[index];
-      } else {                        // 70% 正常随机
-          mutate_arr[i].method = UR(limit);
+      // u32 limit = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
+      // u32 random[2]={13,14};
+      // if (UR(100) < 20) {             // 30% 概率偏向 1~9
+      //     // mutate_arr[i].method = 1 + UR(9);
+      //     int index = UR(2);
+      //     mutate_arr[i].method=random[index];
+      // } else {                        // 70% 正常随机
+      //     mutate_arr[i].method = UR(limit);
+      // }
+      if(turn_on_bandit){
+        mutate_arr[i].method=target_family_to_op[target_family][UR(len_for_target_index)];
+      }else{
+        mutate_arr[i].method =UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
       }
-
+      // 在 switch (mutate_arr[i].method) 之前
+      u32 b_pos_8  = turn_on_bandit ? get_bandit_pos(temp_len, target_region, 1) : 0;
+      u32 b_pos_16 = (temp_len > 2) ? (turn_on_bandit ? get_bandit_pos(temp_len, target_region, 2) : 0) : 0;
+      u32 b_pos_32 = (temp_len > 4) ? (turn_on_bandit ? get_bandit_pos(temp_len, target_region, 4) : 0) : 0;
+      
       switch (mutate_arr[i].method) {
         case 0:
           {
             /* Flip a single bit somewhere. Spooky! */
-            u32 bit = UR(temp_len << 3);
+            // u32 bit = UR(temp_len << 3);
+            u32 bit;
+            if (turn_on_bandit) {
+                // 在选定的字节内随机选一位 (0-7)
+                bit = (b_pos_8 << 3) | UR(8);
+            } else {
+                bit = UR(temp_len << 3);
+            }
             u32 pos = bit >> 3;
             FLIP_BIT(out_buf, bit);
             mutate_arr[i].sites = pos;
@@ -6600,7 +6835,8 @@ havoc_stage:
         case 1:
           {
             /* Set byte to interesting value. */
-            u32 pos = UR(temp_len);
+            // u32 pos = UR(temp_len);
+            u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] = interesting_8[UR(sizeof(interesting_8))];
             mutate_arr[i].sites = pos;
             break;
@@ -6612,7 +6848,8 @@ havoc_stage:
 
             if (temp_len < 2) break;
             {
-              u32 pos = UR(temp_len - 1);
+              // u32 pos = UR(temp_len - 1);
+              u32 pos = turn_on_bandit ? b_pos_16 : UR(temp_len - 1);
 
               if (UR(2)) {
 
@@ -6636,7 +6873,8 @@ havoc_stage:
 
             if (temp_len < 4) break;
             {
-              u32 pos = UR(temp_len - 3);
+              // u32 pos = UR(temp_len - 3);
+              u32 pos = turn_on_bandit ? b_pos_32 : UR(temp_len - 3);
 
               if (UR(2)) {
 
@@ -6660,7 +6898,8 @@ havoc_stage:
         case 4:
           {
             /* Randomly subtract from byte. */
-            u32 pos = UR(temp_len); 
+            // u32 pos = UR(temp_len); 
+            u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] -= 1 + UR(ARITH_MAX);
             mutate_arr[i].sites = pos;
             break;
@@ -6669,7 +6908,8 @@ havoc_stage:
         case 5:
           {
             /* Randomly add to byte. */
-            u32 pos = UR(temp_len); 
+            // u32 pos = UR(temp_len); 
+            u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] += 1 + UR(ARITH_MAX);
             mutate_arr[i].sites = pos;
             break;
@@ -6683,14 +6923,16 @@ havoc_stage:
 
             if (UR(2)) {
 
-              u32 pos = UR(temp_len - 1);
+              // u32 pos = UR(temp_len - 1);
+              u32 pos = turn_on_bandit ? b_pos_16 : UR(temp_len - 1);
 
               *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos;
 
             } else {
 
-              u32 pos = UR(temp_len - 1);
+              // u32 pos = UR(temp_len - 1);
+              u32 pos = turn_on_bandit ? b_pos_16 : UR(temp_len - 1);
               u16 num = 1 + UR(ARITH_MAX);
 
               *(u16*)(out_buf + pos) =
@@ -6710,14 +6952,16 @@ havoc_stage:
 
             if (UR(2)) {
 
-              u32 pos = UR(temp_len - 1);
+              // u32 pos = UR(temp_len - 1);
+              u32 pos = turn_on_bandit ? b_pos_16 : UR(temp_len - 1);
 
               *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos;
 
             } else {
 
-              u32 pos = UR(temp_len - 1);
+              // u32 pos = UR(temp_len - 1);
+              u32 pos = turn_on_bandit ? b_pos_16 : UR(temp_len - 1);
               u16 num = 1 + UR(ARITH_MAX);
 
               *(u16*)(out_buf + pos) =
@@ -6736,14 +6980,16 @@ havoc_stage:
 
             if (UR(2)) {
 
-              u32 pos = UR(temp_len - 3);
+              // u32 pos = UR(temp_len - 3);
+              u32 pos = turn_on_bandit ? b_pos_32 : UR(temp_len - 3);
 
               *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos;
 
             } else {
 
-              u32 pos = UR(temp_len - 3);
+              // u32 pos = UR(temp_len - 3);
+              u32 pos = turn_on_bandit ? b_pos_32 : UR(temp_len - 3);
               u32 num = 1 + UR(ARITH_MAX);
 
               *(u32*)(out_buf + pos) =
@@ -6762,14 +7008,16 @@ havoc_stage:
 
             if (UR(2)) {
 
-              u32 pos = UR(temp_len - 3);
+              // u32 pos = UR(temp_len - 3);
+              u32 pos = turn_on_bandit ? b_pos_32 : UR(temp_len - 3);
 
               *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos; 
 
             } else {
 
-              u32 pos = UR(temp_len - 3);
+              // u32 pos = UR(temp_len - 3);
+              u32 pos = turn_on_bandit ? b_pos_32 : UR(temp_len - 3);
               u32 num = 1 + UR(ARITH_MAX);
 
               *(u32*)(out_buf + pos) =
@@ -6785,7 +7033,8 @@ havoc_stage:
             /* Just set a random byte to a random value. Because,
               why not. We use XOR with 1-255 to eliminate the
               possibility of a no-op. */
-            u32 pos = UR(temp_len);
+            // u32 pos = UR(temp_len);
+            u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] ^= 1 + UR(255);
             mutate_arr[i].sites = pos;
             break;
@@ -6804,7 +7053,8 @@ havoc_stage:
 
             del_len = choose_block_len(temp_len - 1);
 
-            del_from = UR(temp_len - del_len + 1);
+            // del_from = UR(temp_len - del_len + 1);
+            del_from = turn_on_bandit ? get_bandit_pos(temp_len, target_region, del_len) : UR(temp_len - del_len + 1);
 
             memmove(out_buf + del_from, out_buf + del_from + del_len,
                     temp_len - del_from - del_len);
@@ -6840,7 +7090,8 @@ havoc_stage:
 
               }
 
-              clone_to   = UR(temp_len);
+              // clone_to   = UR(temp_len);
+              clone_to = turn_on_bandit ? b_pos_8 : UR(temp_len);
 
               new_buf = ck_alloc_nozero(temp_len + clone_len);
 
@@ -6882,7 +7133,8 @@ havoc_stage:
             copy_len  = choose_block_len(temp_len - 1);
 
             copy_from = UR(temp_len - copy_len + 1);
-            copy_to   = UR(temp_len - copy_len + 1);
+            // copy_to   = UR(temp_len - copy_len + 1);
+            copy_to = turn_on_bandit ? get_bandit_pos(temp_len, target_region, copy_len) : UR(temp_len - copy_len + 1);
 
             if (UR(4)) {
 
@@ -7037,6 +7289,11 @@ havoc_stage:
       if(score_sub>0){//我们记录分数不再限制有新路径的前提上，只要执行都算
         //记录输出分数
         fprintf(fp_output,"%lld ",score_sub);
+        double score_sub_dou=(double)score_sub;
+        if (score_sub_dou>max_score_sub){
+          max_score_sub=score_sub_dou;
+        }
+        
         //记录算子操作
         for (int j=0;j<mutate_count;j++){
           // if(j==0){
@@ -7051,6 +7308,16 @@ havoc_stage:
         fprintf(fp_output,"\n");//使用这个来区分同一个case下的不同变异
     } 
     //这里是for循环结束 也就是一轮变异结束
+    c2py_mem->batch_max_reward =max_score_sub;
+    // 通知 Python Reward 已准备好
+    sem_post(sem_c_batch);
+    //更新最近变异情况
+    update_reward_signal(max_score_sub);
+
+    fprintf(mutate_fp_log,"[C Mock] 5. Reward (%.2f) 已发送，当前 EMA: %.2f\n", 
+        max_score_sub, reward_ema);
+    
+
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
@@ -10756,7 +11023,35 @@ int main(int argc, char** argv) {
   struct timeval tv;
   struct timezone tz;
   mutate_fp = fopen("./mutate_out.txt","w");
+  mutate_fp_log = fopen("/operator-sche-fordgf/mutate_log.txt","w");
   memset(mutate_arr, 0, sizeof(mutate_arr));
+
+  fprintf(mutate_fp_log,"[C Mock] 初始化 IPC 资源...\n");
+  
+  char* s_score = getenv("STATIC_TARGET_SCORE");
+  if (s_score) {
+      static_target_score = strtoull(s_score, NULL, 10);
+      fprintf(mutate_fp_log, "[C Mock] 读取到静态目标分数: %llu\n", static_target_score);
+  } else {
+      static_target_score = 1000; // 如果没传，给个默认大值防止溢出
+  }
+
+  // 1. 创建并打开共享内存
+  fd_c2py = shm_open("/shm_c2py", O_CREAT | O_RDWR, 0666);
+  fd_py2c = shm_open("/shm_py2c", O_CREAT | O_RDWR, 0666);
+  if (ftruncate(fd_c2py, 1024) < 0) PFATAL("ftruncate failed");
+  if (ftruncate(fd_py2c, 128) < 0) PFATAL("ftruncate failed");
+
+  // 映射内存
+  c2py_mem = (struct afl_bandit_shm *)mmap(NULL, 1024, PROT_READ | PROT_WRITE, MAP_SHARED, fd_c2py, 0);
+  py2c_mem = (struct afl_bandit_decision *)mmap(NULL, 128, PROT_READ | PROT_WRITE, MAP_SHARED, fd_py2c, 0);
+
+  // 2. 创建并初始化信号量 (初始值为 0)
+  sem_c_feat = sem_open("/sem_c_feat", O_CREAT, 0666, 0);
+  sem_c_batch = sem_open("/sem_c_batch", O_CREAT, 0666, 0);
+  sem_py_dec = sem_open("/sem_py_dec", O_CREAT, 0666, 0);
+
+  fprintf(mutate_fp_log,"[C Mock] 请现在启动 Python 程序...\n");
 
   SAYF(cCYA "afl-fuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
@@ -11319,6 +11614,15 @@ stop_fuzzing:
   fclose(fp);
   fclose(mutate_fp);
   cmaes_exit(&evo);
+
+  fprintf(mutate_fp_log,"\n[C Mock] 测试结束，清理 IPC 资源...\n");
+  sem_unlink("/sem_c_feat");
+  sem_unlink("/sem_c_batch");
+  sem_unlink("/sem_py_dec");
+  shm_unlink("/shm_c2py");
+  shm_unlink("/shm_py2c");
+  fclose(mutate_fp_log);
+
   exit(0);
 
 }
