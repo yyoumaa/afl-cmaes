@@ -6746,10 +6746,10 @@ havoc_stage:
       // 最后一个区块把剩下的所有字节都吃掉，防止丢掉尾部数据
       u32 current_len = (i == 15) ? (temp_len - offset) : region_len;
       u8* region_ptr = out_buf + offset;
-      c2py_mem->regions_ctx[i][0] = calculate_seed_entropy(region_ptr, region_len);     // 熵
-      c2py_mem->regions_ctx[i][1] = calculate_printable_ratio(region_ptr, region_len);     // 可见字符比例
-      c2py_mem->regions_ctx[i][2] = calculate_history_reward(region_ptr, region_len);    // 历史 reward
-      c2py_mem->regions_ctx[i][3] = calculate_history_coverage(region_ptr, region_len);    // 历史覆盖率
+      c2py_mem->regions_ctx[i][0] = calculate_seed_entropy(region_ptr, current_len);     // 熵
+      c2py_mem->regions_ctx[i][1] = calculate_printable_ratio(region_ptr, current_len);     // 可见字符比例
+      c2py_mem->regions_ctx[i][2] = calculate_history_reward(region_ptr, current_len);    // 历史 reward
+      c2py_mem->regions_ctx[i][3] = calculate_history_coverage(region_ptr, current_len);    // 历史覆盖率
     }
 
     // 通知 Python 特征已准备好
