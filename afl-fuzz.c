@@ -77,6 +77,7 @@
 
 FILE *mutate_fp = NULL;
 FILE *mutate_fp_log = NULL;
+FILE *fp_for_bandit_log = NULL;
 
 typedef struct {
     u32 method;//变异的case方法
@@ -90,7 +91,7 @@ Mutate_arr mutate_arr[256] = {0};
 
 u32 mutate_count = 0;
 int if_use_nn_select=0;//是否使用神经网络选择算子
-int turn_on_bandit=1;
+int turn_on_bandit=0;
 
 int target_region;
 int target_family;
@@ -133,6 +134,9 @@ struct afl_bandit_decision {
  double calc_feat_dynamic_status(u64 cur_score);
  double calc_feat_reward_feedback(void);
  double calculate_seed_entropy(u8* buf, u32 len);
+ double calculate_printable_ratio(u8* buf, u32 len);
+ double calculate_history_reward(u8* buf, u32 len);
+ double calculate_history_coverage(u8* buf, u32 len);
 
  static double reward_ema = 0.0; // 指数移动平均
  static const double alpha_ema = 0.05; // 0.1 代表“平滑窗口”大约是 10 次
@@ -5437,15 +5441,36 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 }
 
-/* 根据 bandit 决定的 region，在指定范围内生成随机位置 */
 static inline u32 get_bandit_pos(u32 total_len, u32 region_idx, u32 item_size) {
-  u32 r_start = (total_len / 16) * region_idx;
-  u32 r_len   = total_len / 16;
-  
-  // 如果剩下的长度不足以放下操作对象（如 4 字节的 dword），则退化到全范围随机或截断
-  if (r_len <= item_size) return UR(total_len - item_size + 1);
 
-  // 在 region 内部产生偏移，注意不要越过 region 边界
+  if (total_len == 0) return 0;
+  if (region_idx >= 16) region_idx = 0;
+  if (item_size == 0) item_size = 1;
+
+  /* 与特征提取阶段保持一致 */
+  u32 region_len = total_len / 16;
+  if (region_len == 0) region_len = 1;
+
+  u32 r_start = region_idx * region_len;
+
+  /* 如果这个 region 已经超出文件长度，退化到全局随机 */
+  if (r_start >= total_len) {
+    if (total_len <= item_size) return 0;
+    return UR(total_len - item_size + 1);
+  }
+
+  /* 最后一个 region 吃掉所有剩余字节 */
+  u32 r_len = (region_idx == 15) ? (total_len - r_start) : region_len;
+
+  /* 如果整个文件都放不下这个操作对象，直接返回 0 */
+  if (total_len <= item_size) return 0;
+
+  /* 如果该 region 放不下 item，就退化到全局随机 */
+  if (r_len < item_size) {
+    return UR(total_len - item_size + 1);
+  }
+
+  /* 在 region 内部随机取一个合法起点 */
   return r_start + UR(r_len - item_size + 1);
 }
 
@@ -5458,13 +5483,17 @@ void update_reward_signal(double current_reward) {
 
 // 特征 1：静态进度（绝对位置）
 double calc_feat_static_progress(u64 cur_score) {
+  if (static_target_score == 0) return 0.0;
   double res = (double)cur_score / (double)static_target_score;
-  return res > 1.0 ? 1.0 : res;
+  if (res > 1.0) res = 1.0;
+  if (res < 0.0) res = 0.0;
+  return res;
 }
 
 // 特征 2：动态地位（相对突破）
 double calc_feat_dynamic_status(u64 cur_score) {
   if (cur_score > dynamic_seen_max_score) dynamic_seen_max_score = cur_score;
+  if (dynamic_seen_max_score == 0) return 0.0;
   return (double)cur_score / (double)dynamic_seen_max_score;
 }
 
@@ -6724,22 +6753,29 @@ havoc_stage:
   common_fuzz_stuff(argv, out_buf, temp_len);
   u64 prox_score_before_before = compute_proximity_score();
 
+  u32 region_len = temp_len / 16;
+  if (region_len == 0) region_len = 1;
+  u32 chosen_off = 0;
+  u32 chosen_len = 0;
+
   if (turn_on_bandit==1){ //开启bandit选择的时候
     //计算此时全局特征
     c2py_mem->global_ctx[0]=calc_feat_static_progress(prox_score_before_before);
     c2py_mem->global_ctx[1]=calc_feat_dynamic_status(prox_score_before_before);
     c2py_mem->global_ctx[2]=calc_feat_reward_feedback();
     //计算当前变异种子特征
-    u32 region_len = temp_len / 16;
-    if (region_len == 0) region_len = 1; // 防止除零
     
+    memset(c2py_mem->regions_ctx, 0, sizeof(c2py_mem->regions_ctx));//先把整个 regions_ctx 清零一遍
+
     for(int i = 0; i < 16; i++) {
       u32 offset = i * region_len;
       
       // 如果超出了文件实际长度，就不要继续算了，直接填充 0
       if (offset >= temp_len) {
         c2py_mem->regions_ctx[i][0] = 0.0;
-        // 其他子特征也填 0.0
+        c2py_mem->regions_ctx[i][1] = 0.0;
+        c2py_mem->regions_ctx[i][2] = 0.0;
+        c2py_mem->regions_ctx[i][3] = 0.0;
         continue;
       }
     
@@ -6752,32 +6788,92 @@ havoc_stage:
       c2py_mem->regions_ctx[i][3] = calculate_history_coverage(region_ptr, current_len);    // 历史覆盖率
     }
 
+    fprintf(fp_for_bandit_log,
+      "\n[BANDIT][SEED] len=%u region_len=%u prox=%llu g0=%.6f g1=%.6f g2=%.6f ema=%.6f dynmax=%llu target=%llu\n",
+      temp_len, region_len,
+      (unsigned long long)prox_score_before_before,
+      c2py_mem->global_ctx[0],
+      c2py_mem->global_ctx[1],
+      c2py_mem->global_ctx[2],
+      reward_ema,
+      (unsigned long long)dynamic_seen_max_score,
+      (unsigned long long)static_target_score
+    );
+    for (int bi = 0; bi < 16; bi++) {
+      u32 boff = bi * region_len;
+      u32 blen = (boff >= temp_len) ? 0 : ((bi == 15) ? (temp_len - boff) : region_len);
+      fprintf(fp_for_bandit_log,
+        "[BANDIT][REGION_FEAT] i=%d off=%u len=%u ent=%.6f pr=%.6f hrew=%.6f hcov=%.6f\n",
+        bi, boff, blen,
+        c2py_mem->regions_ctx[bi][0],
+        c2py_mem->regions_ctx[bi][1],
+        c2py_mem->regions_ctx[bi][2],
+        c2py_mem->regions_ctx[bi][3]
+      );
+    }
+    fflush(fp_for_bandit_log);
+    
     // 通知 Python 特征已准备好
     sem_post(sem_c_feat);
     fprintf(mutate_fp_log,"[C Mock] 2. 等待 Python 决策...\n");
     sem_wait(sem_py_dec);
+
+    if (target_region < 0 || target_region >= 16) {
+      target_region = 0;
+    }
+    if (target_family < 0 || target_family >= 5) {
+      target_family = 0;
+    }
+
     // 读取决策
     target_region = py2c_mem->chosen_region;
     target_family = py2c_mem->chosen_family;
+    
+
+    chosen_off = target_region * region_len;
+    chosen_len = (chosen_off >= temp_len) ? 0 :
+             ((target_region == 15) ? (temp_len - chosen_off) : region_len);
+
+    fprintf(fp_for_bandit_log,
+    "[BANDIT][DECISION] region=%d family=%d off=%u len=%u ent=%.6f pr=%.6f hrew=%.6f hcov=%.6f\n",
+    target_region, target_family,
+    chosen_off, chosen_len,
+    c2py_mem->regions_ctx[target_region][0],
+    c2py_mem->regions_ctx[target_region][1],
+    c2py_mem->regions_ctx[target_region][2],
+    c2py_mem->regions_ctx[target_region][3]
+    );
+    fprintf(fp_for_bandit_log,
+      "[BANDIT][MODE] region_only=1 family_ignored=1 favored_ops={13,14} favored_prob=20\n"
+    );
+    fflush(fp_for_bandit_log);
+
    fprintf(mutate_fp_log,"[C Mock] 3. 收到决策 -> 变异区域: %d, 算子族: %d\n", target_region, target_family);
   }
+
+  u32 saved_stage_max = stage_max;
+  if (turn_on_bandit) {
+    stage_max = 256;   // 一次 bandit 决策，只对应一个 batch  一次 Python 决策 -> 一次 256 尝试的 batch -> 一次 reward 回传
+  }
+  fprintf(fp_for_bandit_log,
+    "[BANDIT][BATCH_CFG] stage_max=%u use_bandit=%d target_region=%d target_family=%d\n",
+    stage_max, turn_on_bandit, target_region, target_family
+  );
+  fflush(fp_for_bandit_log);
   
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
+    u32 bandit_actual_operator_id = UINT32_MAX;
+    u32 bandit_actual_mutate_pos = UINT32_MAX;
+    u32 bandit_actual_mutate_len = 0;
+
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
-    stage_cur_val = use_stacking;
 
-    mutate_count = use_stacking;//记录单次变异个数 
-    // 在使用前初始化（一次）
-    for (size_t k = 0; k < mutate_count; ++k) {
-        mutate_arr[k].sites = UINT32_MAX; // 表示未设置
-        mutate_arr[k].del_num = 0;
-    }
     int len_for_target_index=0;
     if (turn_on_bandit){
-        use_stacking=256; //如果开启了选择，那么就用决策执行固定次数，这样公平一点
+        use_stacking=1; //如果开启了选择，那么就用决策执行固定次数，这样公平一点
           // 安全检查 1：确保 family 没越界 (0-4)
         if (target_family < 0 || target_family > 4) {
           target_family = 0; // 越界就回退到 Family 0
@@ -6788,9 +6884,23 @@ havoc_stage:
           len_for_target_index = 1; // 至少选 family 里的第 0 个算子
         }
     }
+
+    mutate_count = use_stacking;//记录单次变异个数 
+    stage_cur_val = use_stacking;
+
+    // 在使用前初始化（一次）
+    for (size_t k = 0; k < mutate_count; ++k) {
+        mutate_arr[k].sites = UINT32_MAX; // 表示未设置
+        mutate_arr[k].del_num = 0;
+    }
+
+
+    double max_score_sub = 0.0;
+    u32 batch_best_operator_id = UINT32_MAX;
+    u32 batch_best_pos = UINT32_MAX;
+    u32 batch_best_len = 0;
   
     fprintf(mutate_fp_log,"[C Mock] 4. 执行 256 次定向变异...\n");
-    double max_score_sub=0.0;
 
     for (i = 0; i < use_stacking; i++) {
 
@@ -6805,7 +6915,18 @@ havoc_stage:
       //     mutate_arr[i].method = UR(limit);
       // }
       if(turn_on_bandit){
-        mutate_arr[i].method=target_family_to_op[target_family][UR(len_for_target_index)];
+        // mutate_arr[i].method=target_family_to_op[target_family][UR(len_for_target_index)];
+        {//调试阶段先固定算子，只看区域
+          u32 limit = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
+          u32 random[2]={13,14};
+          if (UR(100) < 20) {             // 20% 概率偏向 13 14
+              // mutate_arr[i].method = 1 + UR(9);
+              int index = UR(2);
+              mutate_arr[i].method=random[index];
+          } else {                        // 70% 正常随机
+            mutate_arr[i].method = UR(limit);
+          }
+       }
       }else{
         mutate_arr[i].method =UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
       }
@@ -6813,6 +6934,14 @@ havoc_stage:
       u32 b_pos_8  = turn_on_bandit ? get_bandit_pos(temp_len, target_region, 1) : 0;
       u32 b_pos_16 = (temp_len > 2) ? (turn_on_bandit ? get_bandit_pos(temp_len, target_region, 2) : 0) : 0;
       u32 b_pos_32 = (temp_len > 4) ? (turn_on_bandit ? get_bandit_pos(temp_len, target_region, 4) : 0) : 0;
+
+      if (turn_on_bandit && i < 4) {
+        fprintf(fp_for_bandit_log,
+          "[BANDIT][POS_SAMPLE] i=%u region=%d chosen_off=%u chosen_len=%u pos8=%u pos16=%u pos32=%u\n",
+          i, target_region, chosen_off, chosen_len, b_pos_8, b_pos_16, b_pos_32
+        );
+        fflush(fp_for_bandit_log);
+      }
       
       switch (mutate_arr[i].method) {
         case 0:
@@ -6829,6 +6958,10 @@ havoc_stage:
             u32 pos = bit >> 3;
             FLIP_BIT(out_buf, bit);
             mutate_arr[i].sites = pos;
+
+            bandit_actual_operator_id = 0;
+            bandit_actual_mutate_pos = pos;
+            bandit_actual_mutate_len = 1;
             break;
           }
 
@@ -6839,6 +6972,10 @@ havoc_stage:
             u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] = interesting_8[UR(sizeof(interesting_8))];
             mutate_arr[i].sites = pos;
+
+            bandit_actual_operator_id = 1;
+            bandit_actual_mutate_pos = pos;
+            bandit_actual_mutate_len = 1;
             break;
           }
 
@@ -6862,9 +6999,12 @@ havoc_stage:
                   interesting_16[UR(sizeof(interesting_16) >> 1)]);
 
               }
-              mutate_arr[i].sites = pos;          
-            }
+              mutate_arr[i].sites = pos;  
 
+              bandit_actual_operator_id = 2;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 2;        
+            }
             break;
           }
         case 3:
@@ -6889,6 +7029,10 @@ havoc_stage:
               }
 
               mutate_arr[i].sites = pos;
+
+              bandit_actual_operator_id = 3;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 4;
             }
 
             
@@ -6902,6 +7046,10 @@ havoc_stage:
             u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] -= 1 + UR(ARITH_MAX);
             mutate_arr[i].sites = pos;
+
+            bandit_actual_operator_id = 4;
+            bandit_actual_mutate_pos = pos;
+            bandit_actual_mutate_len = 1;
             break;
           }    
 
@@ -6912,6 +7060,10 @@ havoc_stage:
             u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] += 1 + UR(ARITH_MAX);
             mutate_arr[i].sites = pos;
+
+            bandit_actual_operator_id = 5;
+            bandit_actual_mutate_pos = pos;
+            bandit_actual_mutate_len = 1;
             break;
           }    
 
@@ -6929,6 +7081,10 @@ havoc_stage:
               *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos;
 
+              bandit_actual_operator_id = 6;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 2;
+
             } else {
 
               // u32 pos = UR(temp_len - 1);
@@ -6939,7 +7095,13 @@ havoc_stage:
                 SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
               mutate_arr[i].sites = pos;
 
+              bandit_actual_operator_id = 6;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 2;
+
             }
+
+
 
             break;
           }
@@ -6958,6 +7120,10 @@ havoc_stage:
               *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos;
 
+              bandit_actual_operator_id = 7;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 2;
+
             } else {
 
               // u32 pos = UR(temp_len - 1);
@@ -6967,6 +7133,10 @@ havoc_stage:
               *(u16*)(out_buf + pos) =
                 SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
               mutate_arr[i].sites = pos;
+
+              bandit_actual_operator_id = 7;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 2;
 
             }
 
@@ -6986,6 +7156,10 @@ havoc_stage:
               *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos;
 
+              bandit_actual_operator_id = 8;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 4;
+
             } else {
 
               // u32 pos = UR(temp_len - 3);
@@ -6995,6 +7169,10 @@ havoc_stage:
               *(u32*)(out_buf + pos) =
                 SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
               mutate_arr[i].sites = pos;
+
+              bandit_actual_operator_id = 8;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 4;
 
             }
 
@@ -7014,6 +7192,10 @@ havoc_stage:
               *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
               mutate_arr[i].sites = pos; 
 
+              bandit_actual_operator_id = 9;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 4;
+
             } else {
 
               // u32 pos = UR(temp_len - 3);
@@ -7023,6 +7205,10 @@ havoc_stage:
               *(u32*)(out_buf + pos) =
                 SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
               mutate_arr[i].sites = pos; 
+
+              bandit_actual_operator_id = 9;
+              bandit_actual_mutate_pos = pos;
+              bandit_actual_mutate_len = 4;
 
             }
 
@@ -7037,6 +7223,10 @@ havoc_stage:
             u32 pos = turn_on_bandit ? b_pos_8 : UR(temp_len);
             out_buf[pos] ^= 1 + UR(255);
             mutate_arr[i].sites = pos;
+
+            bandit_actual_operator_id = 10;
+            bandit_actual_mutate_pos = pos;
+            bandit_actual_mutate_len = 1;
             break;
           }
         case 11 ... 12: {
@@ -7063,6 +7253,10 @@ havoc_stage:
 
             mutate_arr[i].sites = del_from;
             mutate_arr[i].del_num = del_len;
+
+            bandit_actual_operator_id = 11;
+            bandit_actual_mutate_pos = del_from;
+            bandit_actual_mutate_len = del_len;
 
             break;
 
@@ -7117,6 +7311,10 @@ havoc_stage:
 
               mutate_arr[i].sites = clone_to;
               mutate_arr[i].del_num = clone_len;
+
+              bandit_actual_operator_id = 13;
+              bandit_actual_mutate_pos = clone_to;
+              bandit_actual_mutate_len = clone_len;
             }
 
             break;
@@ -7146,6 +7344,11 @@ havoc_stage:
 
             mutate_arr[i].sites = copy_to;  
             mutate_arr[i].del_num = copy_len;            
+
+            bandit_actual_operator_id = 14;
+            bandit_actual_mutate_pos = copy_to;
+            bandit_actual_mutate_len = copy_len;
+
             break;
 
           }
@@ -7173,6 +7376,10 @@ havoc_stage:
 
               mutate_arr[i].sites = insert_at;
 
+              bandit_actual_operator_id = 15;
+              bandit_actual_mutate_pos = insert_at;
+              bandit_actual_mutate_len = extra_len;
+
             } else {
 
               /* No auto extras or odds in our favor. Use the dictionary. */
@@ -7187,6 +7394,10 @@ havoc_stage:
               memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
 
               mutate_arr[i].sites = insert_at;
+
+              bandit_actual_operator_id = 15;
+              bandit_actual_mutate_pos = insert_at;
+              bandit_actual_mutate_len = extra_len;
 
             }
 
@@ -7245,13 +7456,17 @@ havoc_stage:
             mutate_arr[i].sites = insert_at;
             mutate_arr[i].del_num = extra_len;
 
+            bandit_actual_operator_id = 16;
+            bandit_actual_mutate_pos = insert_at;
+            bandit_actual_mutate_len = extra_len;
+
             break;
 
           }
 
       }
 
-    }
+    }//这里是内层for循环结束 也就是一轮变异结束
 
     if (common_fuzz_stuff(argv, out_buf, temp_len))
       goto abandon_entry;
@@ -7284,6 +7499,21 @@ havoc_stage:
     }
 
     long long score_sub = (long long)prox_score_after - (long long)prox_score_before_before;  
+
+    if (i < 8 || (i % 32 == 0)) {
+    fprintf(fp_for_bandit_log,
+      "[BANDIT][TRY] i=%u region=%d family=%d op=%u pos=%u len=%u in_region=%d reward=%lld\n",
+      i,
+      target_region,
+      target_family,
+      bandit_actual_operator_id,
+      bandit_actual_mutate_pos,
+      bandit_actual_mutate_len,
+      (bandit_actual_mutate_pos != UINT32_MAX &&
+       bandit_actual_mutate_pos >= chosen_off &&
+       bandit_actual_mutate_pos < chosen_off + chosen_len) ? 1 : 0,
+      score_sub);
+    }
       // fprintf(fp_output,"prox_score_after %lld\n",prox_score_after);
       // fprintf(fp_output,"prox_score_before_before %lld\n",prox_score_before_before);
       if(score_sub>0){//我们记录分数不再限制有新路径的前提上，只要执行都算
@@ -7292,6 +7522,9 @@ havoc_stage:
         double score_sub_dou=(double)score_sub;
         if (score_sub_dou>max_score_sub){
           max_score_sub=score_sub_dou;
+          batch_best_operator_id = bandit_actual_operator_id;
+          batch_best_pos = bandit_actual_mutate_pos;
+          batch_best_len = bandit_actual_mutate_len;
         }
         
         //记录算子操作
@@ -7306,18 +7539,42 @@ havoc_stage:
           // }
         }  
         fprintf(fp_output,"\n");//使用这个来区分同一个case下的不同变异
-    } 
-    //这里是for循环结束 也就是一轮变异结束
-    c2py_mem->batch_max_reward =max_score_sub;
-    // 通知 Python Reward 已准备好
-    sem_post(sem_c_batch);
-    //更新最近变异情况
-    update_reward_signal(max_score_sub);
-
-    fprintf(mutate_fp_log,"[C Mock] 5. Reward (%.2f) 已发送，当前 EMA: %.2f\n", 
-        max_score_sub, reward_ema);
+      } 
     
+  }//外层循环结束
+  
+  fprintf(fp_for_bandit_log,
+    "[BANDIT][BATCH_END] region=%d family=%d batch_reward=%.6f best_op=%u best_pos=%u best_len=%u best_in_region=%d\n",
+    target_region,
+    target_family,
+    max_score_sub,
+    batch_best_operator_id,
+    batch_best_pos,
+    batch_best_len,
+    (batch_best_pos != UINT32_MAX &&
+     batch_best_pos >= chosen_off &&
+     batch_best_pos < chosen_off + chosen_len) ? 1 : 0
+  );
+  fflush(fp_for_bandit_log);
 
+  c2py_mem->batch_max_reward =max_score_sub;
+  // 通知 Python Reward 已准备好
+  sem_post(sem_c_batch);
+  //更新最近变异情况
+  update_reward_signal(max_score_sub);
+
+  fprintf(mutate_fp_log,"[C Mock] 5. Reward (%.2f) 已发送，当前 EMA: %.2f\n", 
+      max_score_sub, reward_ema);
+
+  fprintf(fp_for_bandit_log,
+        "[BANDIT][REWARD_SENT] reward=%.6f ema=%.6f\n",
+        max_score_sub, reward_ema
+      );
+  fflush(fp_for_bandit_log);
+
+
+  if (turn_on_bandit) {
+    stage_max = saved_stage_max;
   }
 
   new_hit_cnt = queued_paths + unique_crashes;
@@ -11024,6 +11281,7 @@ int main(int argc, char** argv) {
   struct timezone tz;
   mutate_fp = fopen("./mutate_out.txt","w");
   mutate_fp_log = fopen("/operator-sche-fordgf/mutate_log.txt","w");
+  fp_for_bandit_log = fopen("/operator-sche-fordgf/bandit_log.txt","w");
   memset(mutate_arr, 0, sizeof(mutate_arr));
 
   fprintf(mutate_fp_log,"[C Mock] 初始化 IPC 资源...\n");
@@ -11546,8 +11804,8 @@ int main(int argc, char** argv) {
     current_entry = queue_cur->entry_id;
 
     skipped_fuzz = fuzz_one(use_argv);
-    fprintf(stderr, "entry=%u skipped=%u favored=%u pending_fav=%u\n",
-      current_entry, skipped_fuzz, queue_cur->favored, pending_favored);
+    // fprintf(stderr, "entry=%u skipped=%u favored=%u pending_fav=%u\n",
+    //   current_entry, skipped_fuzz, queue_cur->favored, pending_favored);
 
 
     if (!stop_soon && sync_id && !skipped_fuzz) {
@@ -11622,6 +11880,7 @@ stop_fuzzing:
   shm_unlink("/shm_c2py");
   shm_unlink("/shm_py2c");
   fclose(mutate_fp_log);
+  fclose(fp_for_bandit_log);
 
   exit(0);
 
