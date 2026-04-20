@@ -36,7 +36,18 @@
 #define _GNU_SOURCE
 #endif
 #define _FILE_OFFSET_BITS 64
+// P_reg: 16个double = 128字节
+// P_fam: 16*5个double = 640字节
+// 合计768字节
+#define PY2C_NUM_REGIONS 16
+#define PY2C_NUM_FAMILIES 5
 
+// 全局统计，按region_len分组比较复杂，简化为按字节位置桶统计
+// 用16个桶对应16个region，桶的大小随seed动态变化
+#define HISTORY_BUCKETS 16
+#define HISTORY_ALPHA 0.05  // EMA衰减系数
+
+// 初始化为0.5
 #include "config.h"
 #include "types.h"
 #include "debug.h"
@@ -109,12 +120,13 @@ struct __attribute__((packed)) afl_bandit_shm {
   double global_ctx[3];
   double regions_ctx[16][4];
   double batch_max_reward;
+  int    best_region;       // 偏移544
+  int    best_family;       // 偏移548
 };
 
-// 对应 Python 端的 struct.pack('<ii', ...)
 struct afl_bandit_decision {
-  int chosen_region;
-  int chosen_family;
+    double P_reg[PY2C_NUM_REGIONS];                    // region概率分布
+    double P_fam[PY2C_NUM_REGIONS][PY2C_NUM_FAMILIES]; // 每个region下family概率
 };
 
  // 创建并打开共享内存
@@ -135,8 +147,11 @@ struct afl_bandit_decision {
  double calc_feat_reward_feedback(void);
  double calculate_seed_entropy(u8* buf, u32 len);
  double calculate_printable_ratio(u8* buf, u32 len);
- double calculate_history_reward(u8* buf, u32 len);
- double calculate_history_coverage(u8* buf, u32 len);
+//  double calculate_history_reward(u8* buf, u32 len);
+//  double calculate_history_coverage(u8* buf, u32 len);
+
+ double region_reward_ema[HISTORY_BUCKETS];   // 每个region的EMA reward
+ double region_coverage_ema[HISTORY_BUCKETS]; // 每个region的EMA coverage增量
 
  static double reward_ema = 0.0; // 指数移动平均
  static const double alpha_ema = 0.05; // 0.1 代表“平滑窗口”大约是 10 次
@@ -5568,13 +5583,23 @@ double calculate_printable_ratio(u8* buf, u32 len) {
   return (double)printable_count / (double)len;
 }
 
-double calculate_history_reward(u8* buf, u32 len) {
-  return 0.5;
-}
-double calculate_history_coverage(u8* buf, u32 len) {
-  return 0.5;
-}
+// double calculate_history_reward(u8* buf, u32 len) {
+//   return 0.5;
+// }
+// double calculate_history_coverage(u8* buf, u32 len) {
+//   return 0.5;
+// }
 
+/* 轮盘赌采样，从概率数组中随机选一个下标 */
+static u32 roulette_select(double *probs, u32 n) {
+  double r = (double)UR(1000000000) / 1000000000.0;
+  double cumsum = 0.0;
+  for (u32 i = 0; i < n; i++) {
+    cumsum += probs[i];
+    if (r <= cumsum) return i;
+  }
+  return n - 1;
+}
 
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
@@ -6758,6 +6783,13 @@ havoc_stage:
   u32 chosen_off = 0;
   u32 chosen_len = 0;
 
+  // 队列里种子数超过50个，或者运行时间超过10分钟，再开启bandit
+  // if (queued_paths > 50 || get_cur_time() - start_time > 10 * 60 * 1000) {
+    if (queued_paths > 30) {
+    turn_on_bandit = 1;
+    fprintf(fp_for_bandit_log,"turn_on_bandit = 1;\n");
+  }
+
   if (turn_on_bandit==1){ //开启bandit选择的时候
     //计算此时全局特征
     c2py_mem->global_ctx[0]=calc_feat_static_progress(prox_score_before_before);
@@ -6774,8 +6806,8 @@ havoc_stage:
       if (offset >= temp_len) {
         c2py_mem->regions_ctx[i][0] = 0.0;
         c2py_mem->regions_ctx[i][1] = 0.0;
-        c2py_mem->regions_ctx[i][2] = 0.0;
-        c2py_mem->regions_ctx[i][3] = 0.0;
+        c2py_mem->regions_ctx[i][2] = region_reward_ema[i];  
+        c2py_mem->regions_ctx[i][3] = region_coverage_ema[i]; 
         continue;
       }
     
@@ -6784,8 +6816,11 @@ havoc_stage:
       u8* region_ptr = out_buf + offset;
       c2py_mem->regions_ctx[i][0] = calculate_seed_entropy(region_ptr, current_len);     // 熵
       c2py_mem->regions_ctx[i][1] = calculate_printable_ratio(region_ptr, current_len);     // 可见字符比例
-      c2py_mem->regions_ctx[i][2] = calculate_history_reward(region_ptr, current_len);    // 历史 reward
-      c2py_mem->regions_ctx[i][3] = calculate_history_coverage(region_ptr, current_len);    // 历史覆盖率
+      c2py_mem->regions_ctx[i][2] = region_reward_ema[i];    // 历史 reward
+      c2py_mem->regions_ctx[i][3] = region_coverage_ema[i];    // 历史覆盖率
+      fprintf(fp_for_bandit_log,
+        "[FEAT_CHECK] i=%d hrew=%.6f hcov=%.6f\n",
+        i, region_reward_ema[i], region_coverage_ema[i]);
     }
 
     fprintf(fp_for_bandit_log,
@@ -6818,49 +6853,27 @@ havoc_stage:
     fprintf(mutate_fp_log,"[C Mock] 2. 等待 Python 决策...\n");
     sem_wait(sem_py_dec);
 
-    if (target_region < 0 || target_region >= 16) {
-      target_region = 0;
-    }
-    if (target_family < 0 || target_family >= 5) {
-      target_family = 0;
-    }
-
-    // 读取决策
-    target_region = py2c_mem->chosen_region;
-    target_family = py2c_mem->chosen_family;
-    
-
-    chosen_off = target_region * region_len;
-    chosen_len = (chosen_off >= temp_len) ? 0 :
-             ((target_region == 15) ? (temp_len - chosen_off) : region_len);
-
+    // 概率已经在py2c_mem->P_reg和P_fam里了
+    // 不再有固定的target_region/target_family
+    // 每次trial会在循环内部采样，这里只记录日志说明模式
     fprintf(fp_for_bandit_log,
-    "[BANDIT][DECISION] region=%d family=%d off=%u len=%u ent=%.6f pr=%.6f hrew=%.6f hcov=%.6f\n",
-    target_region, target_family,
-    chosen_off, chosen_len,
-    c2py_mem->regions_ctx[target_region][0],
-    c2py_mem->regions_ctx[target_region][1],
-    c2py_mem->regions_ctx[target_region][2],
-    c2py_mem->regions_ctx[target_region][3]
-    );
-    fprintf(fp_for_bandit_log,
-      "[BANDIT][MODE] region_only=1 family_ignored=1 favored_ops={13,14} favored_prob=20\n"
+      "[BANDIT][PROB_READY] 概率分布已就绪，将在每次trial内采样\n"
     );
     fflush(fp_for_bandit_log);
 
-   fprintf(mutate_fp_log,"[C Mock] 3. 收到决策 -> 变异区域: %d, 算子族: %d\n", target_region, target_family);
   }
-
-  u32 saved_stage_max = stage_max;
-  if (turn_on_bandit) {
-    stage_max = 256;   // 一次 bandit 决策，只对应一个 batch  一次 Python 决策 -> 一次 256 尝试的 batch -> 一次 reward 回传
-  }
-  fprintf(fp_for_bandit_log,
-    "[BANDIT][BATCH_CFG] stage_max=%u use_bandit=%d target_region=%d target_family=%d\n",
-    stage_max, turn_on_bandit, target_region, target_family
-  );
-  fflush(fp_for_bandit_log);
   
+  // batch级别追踪：记录这256次试验里最好的那次是哪个(region, family)
+  // 初始化为-1，表示本批还没有正收益
+  double max_score_sub = 0.0;
+  int    batch_best_region = -1;   // 产生最高reward的采样region
+  int    batch_best_family = -1;   // 产生最高reward的采样family
+  u32    batch_best_operator_id = UINT32_MAX;
+  u32    batch_best_pos = UINT32_MAX;
+  u32    batch_best_len = 0;
+  
+  int sampled_family_op_len = 0;
+  u32 prev_queued_paths = queued_paths;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
@@ -6868,39 +6881,41 @@ havoc_stage:
     u32 bandit_actual_mutate_pos = UINT32_MAX;
     u32 bandit_actual_mutate_len = 0;
 
+    // 本次trial采样到的region和family（每次都重新采样）
+    int sampled_region = 0;
+    int sampled_family = 0;
+
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
+    if (turn_on_bandit) {
+      use_stacking = 1;
 
-    int len_for_target_index=0;
-    if (turn_on_bandit){
-        use_stacking=1; //如果开启了选择，那么就用决策执行固定次数，这样公平一点
-          // 安全检查 1：确保 family 没越界 (0-4)
-        if (target_family < 0 || target_family > 4) {
-          target_family = 0; // 越界就回退到 Family 0
-        }
-        len_for_target_index=len_for_target[target_family];
-         // 安全检查 2：确保 UR 的参数至少为 1
-        if (len_for_target_index <= 0) {
-          len_for_target_index = 1; // 至少选 family 里的第 0 个算子
-        }
+      // 每次trial独立采样，这是和旧bandit最核心的区别
+      sampled_region = (int)roulette_select(py2c_mem->P_reg, 16);
+      // 安全检查
+      if (sampled_region < 0 || sampled_region >= 16) sampled_region = 0;
+
+      sampled_family = (int)roulette_select(py2c_mem->P_fam[sampled_region], 5);
+      if (sampled_family < 0 || sampled_family >= 5)  sampled_family = 0;
+
+      sampled_family_op_len = len_for_target[sampled_family];
+      if (sampled_family_op_len <= 0) sampled_family_op_len = 1;
+
+
+      // 根据采样到的region计算变异范围
+      chosen_off = sampled_region * region_len;
+      chosen_len = (chosen_off >= temp_len) ? 0 :
+                   ((sampled_region == 15) ? (temp_len - chosen_off) : region_len);
+
     }
 
-    mutate_count = use_stacking;//记录单次变异个数 
+    mutate_count = use_stacking;
     stage_cur_val = use_stacking;
 
-    // 在使用前初始化（一次）
     for (size_t k = 0; k < mutate_count; ++k) {
-        mutate_arr[k].sites = UINT32_MAX; // 表示未设置
-        mutate_arr[k].del_num = 0;
+      mutate_arr[k].sites = UINT32_MAX;
+      mutate_arr[k].del_num = 0;
     }
-
-
-    double max_score_sub = 0.0;
-    u32 batch_best_operator_id = UINT32_MAX;
-    u32 batch_best_pos = UINT32_MAX;
-    u32 batch_best_len = 0;
-  
-    fprintf(mutate_fp_log,"[C Mock] 4. 执行 256 次定向变异...\n");
 
     for (i = 0; i < use_stacking; i++) {
 
@@ -6915,30 +6930,31 @@ havoc_stage:
       //     mutate_arr[i].method = UR(limit);
       // }
       if(turn_on_bandit){
-        // mutate_arr[i].method=target_family_to_op[target_family][UR(len_for_target_index)];
-        {//调试阶段先固定算子，只看区域
-          u32 limit = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
-          u32 random[2]={13,14};
-          if (UR(100) < 20) {             // 20% 概率偏向 13 14
-              // mutate_arr[i].method = 1 + UR(9);
-              int index = UR(2);
-              mutate_arr[i].method=random[index];
-          } else {                        // 70% 正常随机
-            mutate_arr[i].method = UR(limit);
-          }
-       }
+        mutate_arr[i].method = target_family_to_op[sampled_family][UR(sampled_family_op_len)];
+      //   {//调试阶段先固定算子，只看区域
+      //     u32 limit = 15 + ((extras_cnt + a_extras_cnt) ? 2 : 0);
+      //     u32 random[2]={13,14};
+      //     if (UR(100) < 20) {             // 20% 概率偏向 13 14
+      //         // mutate_arr[i].method = 1 + UR(9);
+      //         int index = UR(2);
+      //         mutate_arr[i].method=random[index];
+      //     } else {                        // 70% 正常随机
+      //       mutate_arr[i].method = UR(limit);
+      //     }
+      //  }
       }else{
         mutate_arr[i].method =UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
       }
-      // 在 switch (mutate_arr[i].method) 之前
-      u32 b_pos_8  = turn_on_bandit ? get_bandit_pos(temp_len, target_region, 1) : 0;
-      u32 b_pos_16 = (temp_len > 2) ? (turn_on_bandit ? get_bandit_pos(temp_len, target_region, 2) : 0) : 0;
-      u32 b_pos_32 = (temp_len > 4) ? (turn_on_bandit ? get_bandit_pos(temp_len, target_region, 4) : 0) : 0;
+      // 用sampled_region而不是固定的target_region计算位置
+      u32 b_pos_8  = turn_on_bandit ? get_bandit_pos(temp_len, sampled_region, 1) : 0;
+      u32 b_pos_16 = (temp_len > 2) ? (turn_on_bandit ? get_bandit_pos(temp_len, sampled_region, 2) : 0) : 0;
+      u32 b_pos_32 = (temp_len > 4) ? (turn_on_bandit ? get_bandit_pos(temp_len, sampled_region, 4) : 0) : 0;
 
-      if (turn_on_bandit && i < 4) {
+      // 日志也改用sampled_region
+      if (turn_on_bandit && stage_cur < 4) {
         fprintf(fp_for_bandit_log,
-          "[BANDIT][POS_SAMPLE] i=%u region=%d chosen_off=%u chosen_len=%u pos8=%u pos16=%u pos32=%u\n",
-          i, target_region, chosen_off, chosen_len, b_pos_8, b_pos_16, b_pos_32
+          "[BANDIT][SAMPLE] trial=%u sampled_r=%d sampled_f=%d off=%u len=%u pos8=%u\n",
+          stage_cur, sampled_region, sampled_family, chosen_off, chosen_len, b_pos_8
         );
         fflush(fp_for_bandit_log);
       }
@@ -7244,7 +7260,7 @@ havoc_stage:
             del_len = choose_block_len(temp_len - 1);
 
             // del_from = UR(temp_len - del_len + 1);
-            del_from = turn_on_bandit ? get_bandit_pos(temp_len, target_region, del_len) : UR(temp_len - del_len + 1);
+            del_from = turn_on_bandit ? get_bandit_pos(temp_len, sampled_region, del_len) : UR(temp_len - del_len + 1);
 
             memmove(out_buf + del_from, out_buf + del_from + del_len,
                     temp_len - del_from - del_len);
@@ -7332,7 +7348,7 @@ havoc_stage:
 
             copy_from = UR(temp_len - copy_len + 1);
             // copy_to   = UR(temp_len - copy_len + 1);
-            copy_to = turn_on_bandit ? get_bandit_pos(temp_len, target_region, copy_len) : UR(temp_len - copy_len + 1);
+            copy_to = turn_on_bandit ? get_bandit_pos(temp_len, sampled_region, copy_len) : UR(temp_len - copy_len + 1);
 
             if (UR(4)) {
 
@@ -7487,32 +7503,31 @@ havoc_stage:
     /* If we're finding new stuff, let's run for a bit longer, limits
        permitting. */
 
-    if (queued_paths != havoc_queued) {
-
+    // bandit模式下禁止stage_max扩张，否则256次会变成512、1024
+    // 打乱和Python一问一答的节奏
+    if (!turn_on_bandit && queued_paths != havoc_queued) {
       if (perf_score <= HAVOC_MAX_MULT * 100) {
         stage_max  *= 2;
         perf_score *= 2;
       }
-
       havoc_queued = queued_paths;
-
     }
 
     long long score_sub = (long long)prox_score_after - (long long)prox_score_before_before;  
 
-    if (i < 8 || (i % 32 == 0)) {
-    fprintf(fp_for_bandit_log,
-      "[BANDIT][TRY] i=%u region=%d family=%d op=%u pos=%u len=%u in_region=%d reward=%lld\n",
-      i,
-      target_region,
-      target_family,
-      bandit_actual_operator_id,
-      bandit_actual_mutate_pos,
-      bandit_actual_mutate_len,
-      (bandit_actual_mutate_pos != UINT32_MAX &&
-       bandit_actual_mutate_pos >= chosen_off &&
-       bandit_actual_mutate_pos < chosen_off + chosen_len) ? 1 : 0,
-      score_sub);
+    if (turn_on_bandit && (stage_cur < 8 || stage_cur % 32 == 0)) {
+      fprintf(fp_for_bandit_log,
+        "[BANDIT][TRY] trial=%u sampled_r=%d sampled_f=%d op=%u pos=%u len=%u in_region=%d reward=%lld\n",
+        stage_cur,
+        sampled_region,   // 改这里
+        sampled_family,   // 改这里
+        bandit_actual_operator_id,
+        bandit_actual_mutate_pos,
+        bandit_actual_mutate_len,
+        (bandit_actual_mutate_pos != UINT32_MAX &&
+         bandit_actual_mutate_pos >= chosen_off &&
+         bandit_actual_mutate_pos < chosen_off + chosen_len) ? 1 : 0,
+        score_sub);
     }
       // fprintf(fp_output,"prox_score_after %lld\n",prox_score_after);
       // fprintf(fp_output,"prox_score_before_before %lld\n",prox_score_before_before);
@@ -7520,11 +7535,13 @@ havoc_stage:
         //记录输出分数
         fprintf(fp_output,"%lld ",score_sub);
         double score_sub_dou=(double)score_sub;
-        if (score_sub_dou>max_score_sub){
-          max_score_sub=score_sub_dou;
+        if (score_sub_dou > max_score_sub) {
+          max_score_sub = score_sub_dou;
+          batch_best_region   = sampled_region;  // 记录这次采样的region
+          batch_best_family   = sampled_family;  // 记录这次采样的family
           batch_best_operator_id = bandit_actual_operator_id;
-          batch_best_pos = bandit_actual_mutate_pos;
-          batch_best_len = bandit_actual_mutate_len;
+          batch_best_pos      = bandit_actual_mutate_pos;
+          batch_best_len      = bandit_actual_mutate_len;
         }
         
         //记录算子操作
@@ -7539,43 +7556,78 @@ havoc_stage:
           // }
         }  
         fprintf(fp_output,"\n");//使用这个来区分同一个case下的不同变异
+
+        if (turn_on_bandit && bandit_actual_mutate_pos != UINT32_MAX) {
+
+          // 先更新动态最大值，保证归一化分母是最新的
+            if (score_sub > 0 && (u64)score_sub > dynamic_seen_max_score) {
+              dynamic_seen_max_score = (u64)score_sub;
+          }
+          // 把实际变异位置映射回region编号
+          u32 actual_region = (temp_len > 0) ? 
+              (bandit_actual_mutate_pos * HISTORY_BUCKETS / temp_len) : 0;
+          if (actual_region >= HISTORY_BUCKETS) actual_region = HISTORY_BUCKETS - 1;
+          
+          double normalized_reward = (score_sub > 0) ? 
+              (double)score_sub / (dynamic_seen_max_score + 1.0) : 0.0;
+          
+          double coverage_gain = (queued_paths > prev_queued_paths) ? 1.0 : 0.0;
+          
+          // 只在有正reward时更新，避免大量零reward把值压死
+          if (score_sub > 0) {
+            double normalized_reward = (double)score_sub / (dynamic_seen_max_score + 1.0);
+            region_reward_ema[sampled_region] =   // 改这里
+                (1 - HISTORY_ALPHA) * region_reward_ema[sampled_region] + 
+                HISTORY_ALPHA * normalized_reward;
+
+            fprintf(fp_for_bandit_log,
+              "[HREW_UPDATE] sampled_r=%d actual_region=%d pos=%u len=%u reward=%lld\n",
+              sampled_region, actual_region, bandit_actual_mutate_pos, temp_len, score_sub);
+          
+            }
+
+        // 只在发现新路径时更新
+        if (queued_paths > prev_queued_paths) {
+              region_coverage_ema[sampled_region] =  // 改这里
+              (1 - HISTORY_ALPHA) * region_coverage_ema[sampled_region] + 
+              HISTORY_ALPHA * 1.0;
+            }
+          prev_queued_paths = queued_paths;  //每次trial后更新
+        }
       } 
     
   }//外层循环结束
   
-  fprintf(fp_for_bandit_log,
-    "[BANDIT][BATCH_END] region=%d family=%d batch_reward=%.6f best_op=%u best_pos=%u best_len=%u best_in_region=%d\n",
-    target_region,
-    target_family,
+  // [BANDIT][BATCH_END]日志改用batch_best_region/family
+  if(turn_on_bandit){
+    fprintf(fp_for_bandit_log,
+    "[BANDIT][BATCH_END] best_r=%d best_f=%d batch_reward=%.6f best_op=%u best_pos=%u\n",
+    batch_best_region,
+    batch_best_family,
     max_score_sub,
     batch_best_operator_id,
-    batch_best_pos,
-    batch_best_len,
-    (batch_best_pos != UINT32_MAX &&
-     batch_best_pos >= chosen_off &&
-     batch_best_pos < chosen_off + chosen_len) ? 1 : 0
+    batch_best_pos
   );
-  fflush(fp_for_bandit_log);
+    fflush(fp_for_bandit_log);
 
-  c2py_mem->batch_max_reward =max_score_sub;
-  // 通知 Python Reward 已准备好
-  sem_post(sem_c_batch);
-  //更新最近变异情况
-  update_reward_signal(max_score_sub);
-
-  fprintf(mutate_fp_log,"[C Mock] 5. Reward (%.2f) 已发送，当前 EMA: %.2f\n", 
-      max_score_sub, reward_ema);
-
-  fprintf(fp_for_bandit_log,
-        "[BANDIT][REWARD_SENT] reward=%.6f ema=%.6f\n",
-        max_score_sub, reward_ema
-      );
-  fflush(fp_for_bandit_log);
+    // 写回共享内存：reward + best_region + best_family
+    c2py_mem->batch_max_reward = max_score_sub;
+    c2py_mem->best_region      = batch_best_region; // -1表示本批无正收益
+    c2py_mem->best_family      = batch_best_family; // -1表示本批无正收益
 
 
-  if (turn_on_bandit) {
-    stage_max = saved_stage_max;
+    // 通知 Python Reward 已准备好
+    sem_post(sem_c_batch);
+    //更新最近变异情况
+    update_reward_signal(max_score_sub);
+
+    fprintf(fp_for_bandit_log,
+      "[BANDIT][REWARD_SENT] reward=%.6f best_r=%d best_f=%d ema=%.6f\n",
+      max_score_sub, batch_best_region, batch_best_family, reward_ema
+    );
+    fflush(fp_for_bandit_log);
   }
+
 
   new_hit_cnt = queued_paths + unique_crashes;
 
@@ -11291,23 +11343,31 @@ int main(int argc, char** argv) {
       static_target_score = strtoull(s_score, NULL, 10);
       fprintf(mutate_fp_log, "[C Mock] 读取到静态目标分数: %llu\n", static_target_score);
   } else {
-      static_target_score = 1000; // 如果没传，给个默认大值防止溢出
+      static_target_score = 300; // 如果没传，给个默认大值防止溢出
   }
 
   // 1. 创建并打开共享内存
   fd_c2py = shm_open("/shm_c2py", O_CREAT | O_RDWR, 0666);
   fd_py2c = shm_open("/shm_py2c", O_CREAT | O_RDWR, 0666);
   if (ftruncate(fd_c2py, 1024) < 0) PFATAL("ftruncate failed");
-  if (ftruncate(fd_py2c, 128) < 0) PFATAL("ftruncate failed");
+  if (ftruncate(fd_py2c, 1024) < 0) PFATAL("ftruncate failed");
 
   // 映射内存
   c2py_mem = (struct afl_bandit_shm *)mmap(NULL, 1024, PROT_READ | PROT_WRITE, MAP_SHARED, fd_c2py, 0);
-  py2c_mem = (struct afl_bandit_decision *)mmap(NULL, 128, PROT_READ | PROT_WRITE, MAP_SHARED, fd_py2c, 0);
+  py2c_mem = (struct afl_bandit_decision *)mmap(NULL, 1024, PROT_READ | PROT_WRITE, MAP_SHARED, fd_py2c, 0);
 
   // 2. 创建并初始化信号量 (初始值为 0)
   sem_c_feat = sem_open("/sem_c_feat", O_CREAT, 0666, 0);
   sem_c_batch = sem_open("/sem_c_batch", O_CREAT, 0666, 0);
   sem_py_dec = sem_open("/sem_py_dec", O_CREAT, 0666, 0);
+
+  for (int i = 0; i < HISTORY_BUCKETS; i++) {
+    region_reward_ema[i] = 0.5;
+    region_coverage_ema[i] = 0.5;
+  }
+  fprintf(mutate_fp_log, "[INIT] region_reward_ema[0]=%.3f region_reward_ema[15]=%.3f\n",
+    region_reward_ema[0], region_reward_ema[15]);
+  fflush(mutate_fp_log);
 
   fprintf(mutate_fp_log,"[C Mock] 请现在启动 Python 程序...\n");
 
