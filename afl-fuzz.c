@@ -125,8 +125,8 @@ struct __attribute__((packed)) afl_bandit_shm {
 };
 
 struct afl_bandit_decision {
-    double P_reg[PY2C_NUM_REGIONS];                    // region概率分布
-    double P_fam[PY2C_NUM_REGIONS][PY2C_NUM_FAMILIES]; // 每个region下family概率
+  double P_fam[PY2C_NUM_FAMILIES];                              // family概率分布
+  double P_reg_given_fam[PY2C_NUM_FAMILIES][PY2C_NUM_REGIONS];  // 每个family下region概率
 };
 
  // 创建并打开共享内存
@@ -6785,7 +6785,7 @@ havoc_stage:
 
   // 队列里种子数超过50个，或者运行时间超过10分钟，再开启bandit
   // if (queued_paths > 50 || get_cur_time() - start_time > 10 * 60 * 1000) {
-    if (queued_paths > 30) {
+    if (queued_paths > 10) {
     turn_on_bandit = 1;
     fprintf(fp_for_bandit_log,"turn_on_bandit = 1;\n");
   }
@@ -6891,16 +6891,13 @@ havoc_stage:
       use_stacking = 1;
 
       // 每次trial独立采样，这是和旧bandit最核心的区别
-      sampled_region = (int)roulette_select(py2c_mem->P_reg, 16);
+      // 新顺序: 先选family, 再在该family下选region
+      sampled_family = (int)roulette_select(py2c_mem->P_fam, 5);
       // 安全检查
+      if (sampled_family < 0 || sampled_family >= 5) sampled_family = 0;
+
+      sampled_region = (int)roulette_select(py2c_mem->P_reg_given_fam[sampled_family], 16);
       if (sampled_region < 0 || sampled_region >= 16) sampled_region = 0;
-
-      sampled_family = (int)roulette_select(py2c_mem->P_fam[sampled_region], 5);
-      if (sampled_family < 0 || sampled_family >= 5)  sampled_family = 0;
-
-      sampled_family_op_len = len_for_target[sampled_family];
-      if (sampled_family_op_len <= 0) sampled_family_op_len = 1;
-
 
       // 根据采样到的region计算变异范围
       chosen_off = sampled_region * region_len;
