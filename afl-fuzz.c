@@ -135,6 +135,8 @@ struct __attribute__((packed)) afl_bandit_shm {
 struct afl_bandit_decision {
   double P_fam[PY2C_NUM_FAMILIES];                              // family概率分布
   double P_reg_given_fam[PY2C_NUM_FAMILIES][PY2C_NUM_REGIONS];  // 每个family下region概率
+  int    num_regions;                                            // Python管理的当前region数
+  int    bounds[PY2C_NUM_REGIONS][2];                            // 每个region的[start, end)
 };
 
  // 创建并打开共享内存
@@ -5467,23 +5469,18 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 static inline u32 get_bandit_pos(u32 total_len, u32 region_idx, u32 item_size) {
 
   if (total_len == 0) return 0;
-  if (region_idx >= 16) region_idx = 0;
+  if (region_idx >= (u32)py2c_mem->num_regions) region_idx = 0;
   if (item_size == 0) item_size = 1;
 
-  /* 与特征提取阶段保持一致 */
-  u32 region_len = total_len / 16;
-  if (region_len == 0) region_len = 1;
+  u32 r_start = (u32)py2c_mem->bounds[region_idx][0];
+  u32 r_end   = (u32)py2c_mem->bounds[region_idx][1];
 
-  u32 r_start = region_idx * region_len;
-
-  /* 如果这个 region 已经超出文件长度，退化到全局随机 */
-  if (r_start >= total_len) {
+  if (r_start >= total_len || r_start >= r_end) {
     if (total_len <= item_size) return 0;
     return UR(total_len - item_size + 1);
   }
-
-  /* 最后一个 region 吃掉所有剩余字节 */
-  u32 r_len = (region_idx == 15) ? (total_len - r_start) : region_len;
+  if (r_end > total_len) r_end = total_len;
+  u32 r_len = r_end - r_start;
 
   /* 如果整个文件都放不下这个操作对象，直接返回 0 */
   if (total_len <= item_size) return 0;
@@ -6787,54 +6784,59 @@ havoc_stage:
   common_fuzz_stuff(argv, out_buf, temp_len);
   u64 prox_score_before_before = compute_proximity_score();
 
-  u32 region_len = temp_len / 16;
-  if (region_len == 0) region_len = 1;
   u32 chosen_off = 0;
   u32 chosen_len = 0;
+  int cur_num_regions = py2c_mem->num_regions;
+  if (cur_num_regions <= 0 || cur_num_regions > 16) cur_num_regions = 1;
+  // 首次 Python 还没写 bounds 时，fallback 到整个 seed
+  if (py2c_mem->bounds[0][0] == 0 && py2c_mem->bounds[0][1] == 0 && temp_len > 0) {
+    py2c_mem->num_regions = 1;
+    py2c_mem->bounds[0][0] = 0;
+    py2c_mem->bounds[0][1] = (int)temp_len;
+    cur_num_regions = 1;
+  }
 
   // 队列里种子数超过50个，或者运行时间超过10分钟，再开启bandit
   // if (queued_paths > 50 || get_cur_time() - start_time > 10 * 60 * 1000) {
-    if (queued_paths > 10) {
+    if (queued_paths > 20) {
     turn_on_bandit = 1;
     fprintf(fp_for_bandit_log,"turn_on_bandit = 1;\n");
   }
 
   if (turn_on_bandit==1){ //开启bandit选择的时候
     //计算此时全局特征
-    c2py_mem->global_ctx[0]=calc_feat_static_progress(prox_score_before_before);
+    c2py_mem->global_ctx[0]=(double)(temp_len > 10000 ? 10000 : temp_len) / 10000.0;
     c2py_mem->global_ctx[1]=calc_feat_dynamic_status(prox_score_before_before);
     c2py_mem->global_ctx[2]=calc_feat_reward_feedback();
     //计算当前变异种子特征
     
     memset(c2py_mem->regions_ctx, 0, sizeof(c2py_mem->regions_ctx));//先把整个 regions_ctx 清零一遍
 
-    for(int i = 0; i < 16; i++) {
-      u32 offset = i * region_len;
-      
-      // 如果超出了文件实际长度，就不要继续算了，直接填充 0
-      if (offset >= temp_len) {
+    for(int i = 0; i < cur_num_regions; i++) {
+      u32 r_start = (u32)py2c_mem->bounds[i][0];
+      u32 r_end   = (u32)py2c_mem->bounds[i][1];
+      if (r_start >= temp_len || r_start >= r_end) {
         c2py_mem->regions_ctx[i][0] = 0.0;
         c2py_mem->regions_ctx[i][1] = 0.0;
-        c2py_mem->regions_ctx[i][2] = region_reward_ema[i];  
-        c2py_mem->regions_ctx[i][3] = region_coverage_ema[i]; 
+        c2py_mem->regions_ctx[i][2] = region_reward_ema[i];
+        c2py_mem->regions_ctx[i][3] = region_coverage_ema[i];
         continue;
       }
-    
-      // 最后一个区块把剩下的所有字节都吃掉，防止丢掉尾部数据
-      u32 current_len = (i == 15) ? (temp_len - offset) : region_len;
-      u8* region_ptr = out_buf + offset;
-      c2py_mem->regions_ctx[i][0] = calculate_seed_entropy(region_ptr, current_len);     // 熵
-      c2py_mem->regions_ctx[i][1] = calculate_printable_ratio(region_ptr, current_len);     // 可见字符比例
-      c2py_mem->regions_ctx[i][2] = region_reward_ema[i];    // 历史 reward
-      c2py_mem->regions_ctx[i][3] = region_coverage_ema[i];    // 历史覆盖率
+      if (r_end > temp_len) r_end = temp_len;
+      u32 current_len = r_end - r_start;
+      u8* region_ptr = out_buf + r_start;
+      c2py_mem->regions_ctx[i][0] = calculate_seed_entropy(region_ptr, current_len);
+      c2py_mem->regions_ctx[i][1] = calculate_printable_ratio(region_ptr, current_len);
+      c2py_mem->regions_ctx[i][2] = region_reward_ema[i];
+      c2py_mem->regions_ctx[i][3] = region_coverage_ema[i];
       fprintf(fp_for_bandit_log,
         "[FEAT_CHECK] i=%d hrew=%.6f hcov=%.6f\n",
         i, region_reward_ema[i], region_coverage_ema[i]);
     }
 
     fprintf(fp_for_bandit_log,
-      "\n[BANDIT][SEED] len=%u region_len=%u prox=%llu g0=%.6f g1=%.6f g2=%.6f ema=%.6f dynmax=%llu target=%llu\n",
-      temp_len, region_len,
+      "\n[BANDIT][SEED] len=%u num_regions=%d prox=%llu g0=%.6f g1=%.6f g2=%.6f ema=%.6f dynmax=%llu target=%llu\n",
+      temp_len, cur_num_regions,
       (unsigned long long)prox_score_before_before,
       c2py_mem->global_ctx[0],
       c2py_mem->global_ctx[1],
@@ -6843,9 +6845,10 @@ havoc_stage:
       (unsigned long long)dynamic_seen_max_score,
       (unsigned long long)static_target_score
     );
-    for (int bi = 0; bi < 16; bi++) {
-      u32 boff = bi * region_len;
-      u32 blen = (boff >= temp_len) ? 0 : ((bi == 15) ? (temp_len - boff) : region_len);
+    for (int bi = 0; bi < cur_num_regions; bi++) {
+      u32 boff = (u32)py2c_mem->bounds[bi][0];
+      u32 blen = (u32)py2c_mem->bounds[bi][1] - boff;
+      if (boff + blen > temp_len) blen = temp_len - boff;
       fprintf(fp_for_bandit_log,
         "[BANDIT][REGION_FEAT] i=%d off=%u len=%u ent=%.6f pr=%.6f hrew=%.6f hcov=%.6f\n",
         bi, boff, blen,
@@ -6909,16 +6912,16 @@ havoc_stage:
     for (i = 0; i < use_stacking; i++) {
 
       if (is_bandit_trial) {
-        // 每步独立采样 family 和 region，保留 AFL 原生混合多样性
         sampled_family = (int)roulette_select(py2c_mem->P_fam, 5);
         if (sampled_family < 0 || sampled_family >= 5) sampled_family = 0;
         sampled_family_op_len = len_for_target[sampled_family];
 
-        sampled_region = (int)roulette_select(py2c_mem->P_reg_given_fam[sampled_family], 16);
-        if (sampled_region < 0 || sampled_region >= 16) sampled_region = 0;
-        chosen_off = sampled_region * region_len;
-        chosen_len = (chosen_off >= temp_len) ? 0 :
-                     ((sampled_region == 15) ? (temp_len - chosen_off) : region_len);
+        sampled_region = (int)roulette_select(py2c_mem->P_reg_given_fam[sampled_family], cur_num_regions);
+        if (sampled_region < 0 || sampled_region >= cur_num_regions) sampled_region = 0;
+        chosen_off = (u32)py2c_mem->bounds[sampled_region][0];
+        chosen_len = (u32)py2c_mem->bounds[sampled_region][1] - chosen_off;
+        if (chosen_off >= temp_len) { chosen_off = 0; chosen_len = 0; }
+        if (chosen_off + chosen_len > temp_len) chosen_len = temp_len - chosen_off;
 
         mutate_arr[i].method = target_family_to_op[sampled_family][UR(sampled_family_op_len)];
 
@@ -7465,8 +7468,14 @@ havoc_stage:
       }
       
       if (turn_on_bandit && bandit_actual_mutate_pos != UINT32_MAX) {
-        u32 touched_region = bandit_actual_mutate_pos / region_len;
-        if (touched_region >= 16) touched_region = 15;
+        int touched_region = 0;
+        for (int r = 0; r < cur_num_regions; r++) {
+          if ((int)bandit_actual_mutate_pos >= py2c_mem->bounds[r][0] &&
+              (int)bandit_actual_mutate_pos <  py2c_mem->bounds[r][1]) {
+            touched_region = r;
+            break;
+          }
+        }
         trial_region_touches[touched_region]++;
         trial_total_region_touches++;
       }
@@ -7545,7 +7554,7 @@ havoc_stage:
 
         int dominant_region = sampled_region;
         int best_touch = 0;
-        for (int r = 0; r < 16; r++) {
+        for (int r = 0; r < cur_num_regions; r++) {
           if (trial_region_touches[r] > best_touch) {
             best_touch = trial_region_touches[r];
             dominant_region = r;
