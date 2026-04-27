@@ -39,8 +39,8 @@
 // P_reg: 16个double = 128字节
 // P_fam: 16*5个double = 640字节
 // 合计768字节
+#define PY2C_NUM_OPS 16
 #define PY2C_NUM_REGIONS 16
-#define PY2C_NUM_FAMILIES 5
 
 // 全局统计，按region_len分组比较复杂，简化为按字节位置桶统计
 // 用16个桶对应16个region，桶的大小随seed动态变化
@@ -105,22 +105,16 @@ int if_use_nn_select=0;//是否使用神经网络选择算子
 int turn_on_bandit=0;
 
 int target_region;
-int target_family;
-int target_family_to_op[5][9] = {
-  {1, 2, 3, 4, 5, 6, 7, 8, 9},
-  {0, 10, -1, -1, -1, -1, -1, -1, -1},
-  {11, 12, -1, -1, -1, -1, -1, -1, -1},
-  {13, -1, -1, -1, -1, -1, -1, -1, -1},
-  {14, -1, -1, -1, -1, -1, -1, -1, -1}
-};
-int len_for_target[]={9,2,2,1,1};
+// per-operator bandit: 不再需要 family 分组
+// int target_family_to_op (deleted)
+// int len_for_target (deleted)
 
 #define MAX_BATCH_FEEDBACKS 64
 
 struct batch_feedback_entry {
   double reward;
   int    region;
-  int    family;
+  int    op;
 };
 
 // 对应 Python 端: 特征 536 字节 + 多条反馈
@@ -129,12 +123,12 @@ struct __attribute__((packed)) afl_bandit_shm {
   double regions_ctx[16][4];      // 24-535
   int    num_feedbacks;           // 536-539
   struct batch_feedback_entry feedbacks[MAX_BATCH_FEEDBACKS]; // 540 起, 每条16字节
-  int    family_trials[5];        // 每个family本batch的bandit trial数
+  int    op_trials[PY2C_NUM_OPS];       // 每个算子本batch的bandit trial数
 };
 
 struct afl_bandit_decision {
-  double P_fam[PY2C_NUM_FAMILIES];                              // family概率分布
-  double P_reg_given_fam[PY2C_NUM_FAMILIES][PY2C_NUM_REGIONS];  // 每个family下region概率
+  double P_op[PY2C_NUM_OPS];                                     // 算子概率分布
+  double P_reg_given_op[PY2C_NUM_OPS][PY2C_NUM_REGIONS];         // 每个算子下region概率
   int    num_regions;                                            // Python管理的当前region数
   int    bounds[PY2C_NUM_REGIONS][2];                            // 每个region的[start, end)
 };
@@ -6875,28 +6869,26 @@ havoc_stage:
 
   }
   
-  // batch级别追踪：收集所有正收益的(region, family, reward)
+  // batch级别追踪：收集所有正收益的(region, op, reward)
   int feedback_count = 0;
-  int family_trial_counts[5] = {0, 0, 0, 0, 0};
-
-  int sampled_family_op_len = 0;
+  int op_trial_counts[PY2C_NUM_OPS];
+  memset(op_trial_counts, 0, sizeof(op_trial_counts));
   u32 prev_queued_paths = queued_paths;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
-    int trial_family_counts[5] = {0, 0, 0, 0, 0};
+    int trial_op_counts[PY2C_NUM_OPS];
+    memset(trial_op_counts, 0, sizeof(trial_op_counts));
     int trial_region_touches[16] = {0};
-    int trial_total_family_ops = 0;
+    int trial_total_ops = 0;
     int trial_total_region_touches = 0;
 
     u32 bandit_actual_operator_id = UINT32_MAX;
     u32 bandit_actual_mutate_pos = UINT32_MAX;
     u32 bandit_actual_mutate_len = 0;
 
-    // 本次trial采样到的region和family（每次都重新采样）
+    // 本次trial采样到的region（每次都重新采样）
     int sampled_region = 0;
-    int sampled_family = 0;
-
     int is_bandit_trial = turn_on_bandit;
 
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
@@ -6912,21 +6904,19 @@ havoc_stage:
     for (i = 0; i < use_stacking; i++) {
 
       if (is_bandit_trial) {
-        sampled_family = (int)roulette_select(py2c_mem->P_fam, 5);
-        if (sampled_family < 0 || sampled_family >= 5) sampled_family = 0;
-        sampled_family_op_len = len_for_target[sampled_family];
+        int sampled_op = (int)roulette_select(py2c_mem->P_op, 15);
+        if (sampled_op < 0 || sampled_op > 14) sampled_op = UR(15);
 
-        sampled_region = (int)roulette_select(py2c_mem->P_reg_given_fam[sampled_family], cur_num_regions);
+        sampled_region = (int)roulette_select(py2c_mem->P_reg_given_op[sampled_op], cur_num_regions);
         if (sampled_region < 0 || sampled_region >= cur_num_regions) sampled_region = 0;
         chosen_off = (u32)py2c_mem->bounds[sampled_region][0];
         chosen_len = (u32)py2c_mem->bounds[sampled_region][1] - chosen_off;
         if (chosen_off >= temp_len) { chosen_off = 0; chosen_len = 0; }
         if (chosen_off + chosen_len > temp_len) chosen_len = temp_len - chosen_off;
 
-        mutate_arr[i].method = target_family_to_op[sampled_family][UR(sampled_family_op_len)];
-
-        trial_family_counts[sampled_family]++;
-        trial_total_family_ops++;
+        mutate_arr[i].method = sampled_op;
+        trial_op_counts[sampled_op]++;
+        trial_total_ops++;
       } else {
         mutate_arr[i].method = UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0));
       }
@@ -6939,8 +6929,8 @@ havoc_stage:
       // 日志也改用sampled_region
       if (is_bandit_trial && stage_cur < 4) {
         fprintf(fp_for_bandit_log,
-          "[BANDIT][SAMPLE] trial=%u sampled_r=%d sampled_f=%d off=%u len=%u pos8=%u\n",
-          stage_cur, sampled_region, sampled_family, chosen_off, chosen_len, b_pos_8
+          "[BANDIT][SAMPLE] trial=%u sampled_r=%d sampled_op=%d off=%u len=%u pos8=%u\n",
+          stage_cur, sampled_region, mutate_arr[i].method, chosen_off, chosen_len, b_pos_8
         );
         fflush(fp_for_bandit_log);
       }
@@ -7482,21 +7472,11 @@ havoc_stage:
 
     }//这里是内层for循环结束 也就是一轮变异结束
 
-    // 按 trial 计数：找本轮用得最多的 family，给它 +1
-    // 平局时随机选一个，避免 family 0 系统性偏高
+    // per-op: 直接累加每个算子的 trial 次数
     if (is_bandit_trial) {
-      int dom_f = 0;
-      int tie_count = 1;
-      for (int f = 1; f < 5; f++) {
-        if (trial_family_counts[f] > trial_family_counts[dom_f]) {
-          dom_f = f;
-          tie_count = 1;
-        } else if (trial_family_counts[f] == trial_family_counts[dom_f]) {
-          tie_count++;
-          if (UR(tie_count) == 0) dom_f = f;
-        }
+      for (int op = 0; op < 15; op++) {
+        op_trial_counts[op] += trial_op_counts[op];
       }
-      family_trial_counts[dom_f]++;
     }
 
     if (common_fuzz_stuff(argv, out_buf, temp_len))
@@ -7532,10 +7512,9 @@ havoc_stage:
 
     if (is_bandit_trial && (stage_cur < 8 || stage_cur % 32 == 0)) {
       fprintf(fp_for_bandit_log,
-        "[BANDIT][TRY] trial=%u sampled_r=%d sampled_f=%d op=%u pos=%u len=%u in_region=%d reward=%lld\n",
+        "[BANDIT][TRY] trial=%u sampled_r=%d op=%u pos=%u len=%u in_region=%d reward=%lld\n",
         stage_cur,
-        sampled_region,   // 改这里
-        sampled_family,   // 改这里
+        sampled_region,
         bandit_actual_operator_id,
         bandit_actual_mutate_pos,
         bandit_actual_mutate_len,
@@ -7562,14 +7541,13 @@ havoc_stage:
         }
 
         // 正反馈优先写入，确保不被负反馈挤掉
-        if (is_bandit_trial && trial_total_family_ops > 0) {
+        if (is_bandit_trial && trial_total_ops > 0) {
           double norm_reward = score_sub_dou / (dynamic_seen_max_score > 0 ? (double)dynamic_seen_max_score : 1.0);
-          for (int f = 0; f < 5 && feedback_count < MAX_BATCH_FEEDBACKS; f++) {
-            if (trial_family_counts[f] <= 0) continue;
-            c2py_mem->feedbacks[feedback_count].reward =
-                norm_reward * ((double)trial_family_counts[f] / (double)trial_total_family_ops);
+          for (int op = 0; op < 15 && feedback_count < MAX_BATCH_FEEDBACKS; op++) {
+            if (trial_op_counts[op] <= 0) continue;
+            c2py_mem->feedbacks[feedback_count].reward = norm_reward;
             c2py_mem->feedbacks[feedback_count].region = dominant_region;
-            c2py_mem->feedbacks[feedback_count].family = f;
+            c2py_mem->feedbacks[feedback_count].op = op;
             feedback_count++;
           }
         }
@@ -7613,7 +7591,7 @@ havoc_stage:
             fprintf(fp_for_bandit_log,
               "[HREW_UPDATE] sampled_r=%d actual_region=%d pos=%u len=%u reward=%lld dominant_r=%d total_ops=%d\n",
               sampled_region, actual_region, bandit_actual_mutate_pos, temp_len, score_sub,
-              dominant_region, trial_total_family_ops);
+              dominant_region, trial_total_ops);
 
             }
 
@@ -7640,7 +7618,7 @@ havoc_stage:
 
     // 写回共享内存：反馈条数
     c2py_mem->num_feedbacks = feedback_count;
-    memcpy(c2py_mem->family_trials, family_trial_counts, sizeof(family_trial_counts));
+    memcpy(c2py_mem->op_trials, op_trial_counts, sizeof(op_trial_counts));
 
     // 通知 Python Reward 已准备好
     sem_post(sem_c_batch);
@@ -11381,11 +11359,11 @@ int main(int argc, char** argv) {
   fd_c2py = shm_open("/shm_c2py", O_CREAT | O_RDWR, 0666);
   fd_py2c = shm_open("/shm_py2c", O_CREAT | O_RDWR, 0666);
   if (ftruncate(fd_c2py, 2048) < 0) PFATAL("ftruncate failed");
-  if (ftruncate(fd_py2c, 2048) < 0) PFATAL("ftruncate failed");
+  if (ftruncate(fd_py2c, 4096) < 0) PFATAL("ftruncate failed");
 
   // 映射内存
   c2py_mem = (struct afl_bandit_shm *)mmap(NULL, 2048, PROT_READ | PROT_WRITE, MAP_SHARED, fd_c2py, 0);
-  py2c_mem = (struct afl_bandit_decision *)mmap(NULL, 2048, PROT_READ | PROT_WRITE, MAP_SHARED, fd_py2c, 0);
+  py2c_mem = (struct afl_bandit_decision *)mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd_py2c, 0);
 
   // 2. 创建并初始化信号量 (初始值为 0)
   sem_c_feat = sem_open("/sem_c_feat", O_CREAT, 0666, 0);
